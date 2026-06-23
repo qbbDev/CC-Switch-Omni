@@ -71,4 +71,4 @@ chmod +x package.sh
 
 ## 许可证
 
-Copyright © 2025 CC Switch. All rights reserved.
+Copyright © 2026 CC Switch Omni. All rights reserved.

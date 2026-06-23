@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "CC Switch 使用统计聚合面板",
   "main": "main.js",
-  "author": "cc-switch",
+  "author": "CC Switch Omni",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --mac",
@@ -17,7 +17,7 @@
   "build": {
     "appId": "com.cc-switch.omni",
     "productName": "CC Switch Omni",
-    "copyright": "Copyright © 2025",
+    "copyright": "Copyright © 2026 CC Switch Omni",
     "publish": null,
     "asar": false,
     "directories": {
