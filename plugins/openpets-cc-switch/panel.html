@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>CC Switch 用量面板</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #0d0e14;
+            --card-bg: rgba(22, 24, 37, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent-color: #00f3ff;
+            --success-color: #10b981;
+            --error-color: #f43f5e;
+            --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            padding: 12px;
+            overflow-x: hidden;
+            font-size: 13px;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .preset-select {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .metric-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .metric-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .metric-value {
+            font-size: 18px;
+            font-weight: bold;
+            font-family: monospace;
+            background: linear-gradient(135deg, #00f3ff 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .metric-cost {
+            font-size: 16px;
+            font-weight: bold;
+            color: var(--success-color);
+            font-family: monospace;
+        }
+
+        .chart-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 10px;
+            margin-bottom: 12px;
+            height: 160px;
+        }
+
+        .model-list-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 10px;
+        }
+
+        .section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .model-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        }
+        .model-row:last-child {
+            border-bottom: none;
+        }
+
+        .model-name {
+            font-size: 11px;
+            color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+        }
+
+        .model-bar-container {
+            width: 60px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .model-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00f3ff, #8b5cf6);
+            border-radius: 2px;
+        }
+
+        .model-value {
+            font-size: 11px;
+            font-weight: 600;
+            font-family: monospace;
+            color: var(--text-primary);
+        }
+
+        .status-bar {
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--text-secondary);
+        }
+        .status-dot.ok {
+            background: var(--success-color);
+            box-shadow: 0 0 6px var(--success-color);
+        }
+        .status-dot.loading {
+            background: var(--warning-color);
+            animation: pulse 1s infinite alternate;
+        }
+        .status-dot.error {
+            background: var(--error-color);
+            box-shadow: 0 0 6px var(--error-color);
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.4; }
+            100% { opacity: 1; }
+        }
+
+        .error-message {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 120px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            gap: 6px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <span class="title">CC Switch 用量监控</span>
+        <select class="preset-select" id="presetSelect" onchange="fetchData()">
+            <option value="today">今日</option>
+            <option value="1d" selected>最近24h</option>
+            <option value="7d">最近7天</option>
+            <option value="30d">最近30天</option>
+        </select>
+    </div>
+
+    <div class="metrics-grid">
+        <div class="metric-card">
+            <span class="metric-label">Token 总用量</span>
+            <span class="metric-value" id="totalTokens">–</span>
+        </div>
+        <div class="metric-card">
+            <span class="metric-label">估算花费 (USD)</span>
+            <span class="metric-cost" id="totalCost">$–</span>
+        </div>
+    </div>
+
+    <div class="chart-card">
+        <canvas id="usageChart"></canvas>
+    </div>
+
+    <div class="model-list-card">
+        <div class="section-title">模型用量排行</div>
+        <div id="modelList">
+            <!-- Dynamic rows -->
+            <div class="error-message">正在拉取数据...</div>
+        </div>
+    </div>
+
+    <div class="status-bar">
+        <div class="status-indicator">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">正在同步...</span>
+        </div>
+        <span id="refreshTime">-</span>
+    </div>
+
+    <script>
+        let chartInstance = null;
+        const agentPort = 15722; // default port
+
+        async function fetchData() {
+            updateStatus('loading', '正在拉取...');
+            const preset = document.getElementById('presetSelect').value;
+            
+            try {
+                const response = await fetch(`http://127.0.0.1:${agentPort}/api/usage?range=${preset}`);
+                if (!response.ok) {
+                    throw new Error('Server returned error');
+                }
+                const data = await response.json();
+                renderDashboard(data);
+                updateStatus('ok', '数据已更新');
+            } catch (err) {
+                renderError();
+                updateStatus('error', '连接 Agent 失败');
+                console.error(err);
+            }
+        }
+
+        function updateStatus(state, text) {
+            const dot = document.getElementById('statusDot');
+            const txt = document.getElementById('statusText');
+            const time = document.getElementById('refreshTime');
+            
+            if (dot) dot.className = 'status-dot ' + state;
+            if (txt) txt.textContent = text;
+            if (time && state === 'ok') {
+                const now = new Date();
+                time.textContent = now.toTimeString().split(' ')[0];
+            }
+        }
+
+        function renderDashboard(data) {
+            const summary = data.summary || {};
+            const total = (summary.input_tokens || 0) 
+                        + (summary.output_tokens || 0) 
+                        + (summary.cache_read_tokens || 0) 
+                        + (summary.cache_creation_tokens || 0);
+            const cost = summary.total_cost || 0;
+
+            document.getElementById('totalTokens').textContent = total.toLocaleString();
+            document.getElementById('totalCost').textContent = '$' + cost.toFixed(4);
+
+            // ── Render Chart ──
+            renderChart(data.trends || []);
+
+            // ── Render Model Rank ──
+            renderModelList(data.model_stats || [], total);
+        }
+
+        function renderChart(trends) {
+            const canvas = document.getElementById('usageChart');
+            if (chartInstance) {
+                chartInstance.destroy();
+            }
+
+            const labels = [];
+            const tokenData = [];
+
+            if (!trends.length) {
+                labels.push('无数据');
+                tokenData.push(0);
+            } else {
+                // Take last 12 points to fit panel size
+                const points = trends.slice(-12);
+                points.forEach(p => {
+                    labels.push(p.date.slice(-5)); // show HH:MM or MM-DD
+                    tokenData.push((p.input_tokens || 0) + (p.output_tokens || 0) + (p.cache_read_tokens || 0) + (p.cache_creation_tokens || 0));
+                });
+            }
+
+            chartInstance = new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Tokens',
+                        data: tokenData,
+                        borderColor: '#00f3ff',
+                        backgroundColor: 'rgba(0, 243, 255, 0.05)',
+                        borderWidth: 1.5,
+                        pointRadius: 1,
+                        tension: 0.3,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { enabled: true }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.03)' },
+                            ticks: { color: '#64748b', font: { size: 9 } }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.03)' },
+                            ticks: {
+                                color: '#64748b',
+                                font: { size: 9 },
+                                callback: v => v >= 1000 ? (v/1000).toFixed(0) + 'k' : v
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderModelList(stats, grandTotal) {
+            const container = document.getElementById('modelList');
+            if (!stats.length) {
+                container.innerHTML = '<div class="error-message">当前周期无模型使用数据</div>';
+                return;
+            }
+
+            // Group & sort
+            const sorted = stats.sort((a, b) => b.total_tokens - a.total_tokens).slice(0, 4);
+
+            container.innerHTML = sorted.map(m => {
+                const total = m.total_tokens || ((m.input_tokens || 0) + (m.output_tokens || 0));
+                const pct = grandTotal > 0 ? (total / grandTotal * 100) : 0;
+                return `
+                    <div class="model-row">
+                        <div class="model-name" title="${m.model_name}">${m.model_name}</div>
+                        <div class="model-bar-container">
+                            <div class="model-bar-fill" style="width: ${pct.toFixed(0)}%"></div>
+                        </div>
+                        <div class="model-value">${total.toLocaleString()}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderError() {
+            document.getElementById('totalTokens').textContent = '–';
+            document.getElementById('totalCost').textContent = '$–';
+            document.getElementById('modelList').innerHTML = `
+                <div class="error-message">
+                    <span>⚠️ 无法连接到本地 Agent 数据源</span>
+                    <button onclick="fetchData()" style="margin-top:6px; font-size:10px; padding:3px 6px; cursor:pointer;">重试</button>
+                </div>
+            `;
+            if (chartInstance) {
+                chartInstance.destroy();
+                chartInstance = null;
+            }
+        }
+
+        // Init
+        window.addEventListener('DOMContentLoaded', () => {
+            fetchData();
+            // Refresh dashboard every 30s when panel is open
+            setInterval(fetchData, 30000);
+        });
+    </script>
+</body>
+</html>

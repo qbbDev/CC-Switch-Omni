@@ -1,0 +1,51 @@
+{
+  "id": "openpets-cc-switch",
+  "name": "CC Switch 用量监控助手",
+  "version": "1.0.0",
+  "description": "监控 CC Switch 代理网关的 Token 消耗、大模型调用次数与花费，并联动桌面宠物进行气泡吐槽和心情反馈。",
+  "author": "CC Switch Omni",
+  "entry": "index.js",
+  "permissions": [
+    "network:fetch"
+  ],
+  "hosts": [
+    "http://127.0.0.1:15722",
+    "http://localhost:15722"
+  ],
+  "settings": {
+    "agentPort": {
+      "type": "number",
+      "default": 15722,
+      "label": "本地 Agent 端口"
+    },
+    "pollInterval": {
+      "type": "select",
+      "default": "15s",
+      "options": ["10s", "15s", "30s", "60s"],
+      "label": "数据更新频率"
+    },
+    "costThreshold": {
+      "type": "number",
+      "default": 0.1,
+      "label": "大额花费报警阈值 ($)"
+    },
+    "tokenThreshold": {
+      "type": "number",
+      "default": 5000,
+      "label": "单次大额 Token 阈值"
+    }
+  },
+  "schedules": [
+    {
+      "name": "pollUsage",
+      "interval": "15s"
+    }
+  ],
+  "panels": [
+    {
+      "id": "usage-dashboard",
+      "title": "CC 用量看板",
+      "entry": "panel.html"
+    }
+  ]
+}

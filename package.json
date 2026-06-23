@@ -1,51 +1,11 @@
 {
   "name": "cc-switch-aggregator",
   "version": "1.0.0",
-  "description": "CC Switch 使用统计聚合面板",
-  "main": "main.js",
+  "description": "CC Switch 使用统计数据源与 OpenPets 插件",
+  "main": "agent.py",
   "author": "CC Switch Omni",
   "scripts": {
-    "start": "electron .",
-    "build": "electron-builder --mac",
-    "build:dmg": "electron-builder --mac dmg",
-    "build:dir": "electron-builder --mac dir"
+    "start": "python3 agent.py"
   },
-  "devDependencies": {
-    "electron": "^31.0.0",
-    "electron-builder": "^24.0.0"
-  },
-  "build": {
-    "appId": "com.cc-switch.omni",
-    "productName": "CC Switch Omni",
-    "copyright": "Copyright © 2026 CC Switch Omni",
-    "publish": null,
-    "asar": false,
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "**/*",
-      "!dist/**",
-      "!node_modules/.cache/**",
-      "!**/*.md",
-      "!.git/**"
-    ],
-    "mac": {
-      "category": "public.app-category.developer-tools",
-      "icon": "build/icon.png",
-      "target": [
-        { "target": "dmg",  "arch": ["arm64", "x64"] },
-        { "target": "dir",  "arch": ["arm64", "x64"] }
-      ],
-      "darkModeSupport": true,
-      "hardenedRuntime": false,
-      "gatekeeperAssess": false
-    },
-    "dmg": {
-      "title": "CC Switch Omni ${version}",
-      "icon": "build/icon.png",
-      "background": null,
-      "window": { "width": 540, "height": 380 }
-    }
-  }
+  "dependencies": {}
 }
