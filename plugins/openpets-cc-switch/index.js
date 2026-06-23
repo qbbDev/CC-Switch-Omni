@@ -1,69 +1,65 @@
 let lastTotalTokens = 0;
 let lastTotalCost = 0;
 
-// Defensive wrappers for OpenPets SDK APIs
-function petSpeak(ctx, text) {
+// Defensive helper to trigger animations
+async function petReact(ctx, reaction) {
     if (!ctx.pet) return;
     try {
-        if (typeof ctx.pet.say === 'function') {
-            ctx.pet.say(text);
-        } else if (typeof ctx.pet.speak === 'function') {
-            ctx.pet.speak(text);
-        } else {
-            console.log("[CC Switch Plugin] Pet speak:", text);
+        if (typeof ctx.pet.react === 'function') {
+            await ctx.pet.react(reaction);
         }
     } catch (err) {
-        console.error("[CC Switch Plugin] Error speaking:", err);
+        ctx.log.error("Failed to trigger pet reaction:", err);
     }
 }
 
-function petAnimate(ctx, anim) {
+// Defensive helper to make the pet speak
+async function petSpeak(ctx, text) {
     if (!ctx.pet) return;
     try {
-        if (typeof ctx.pet.triggerAnimation === 'function') {
-            ctx.pet.triggerAnimation(anim);
-        } else if (typeof ctx.pet.playAnimation === 'function') {
-            ctx.pet.playAnimation(anim);
-        } else if (typeof ctx.pet.interact === 'function') {
-            ctx.pet.interact(anim);
-        } else {
-            console.log("[CC Switch Plugin] Pet animation:", anim);
+        if (typeof ctx.pet.speak === 'function') {
+            await ctx.pet.speak(text);
         }
     } catch (err) {
-        console.error("[CC Switch Plugin] Error animating:", err);
+        ctx.log.error("Failed to make pet speak:", err);
     }
 }
 
-function petSetStatus(ctx, status) {
-    if (!ctx.pet) return;
+// Update plugin status line in the control panel
+async function setPluginStatus(ctx, state, text) {
+    if (!ctx.status) return;
     try {
-        if (typeof ctx.pet.setStatus === 'function') {
-            ctx.pet.setStatus(status);
-        } else if (typeof ctx.pet.setStatusPin === 'function') {
-            ctx.pet.setStatusPin(status);
-        }
+        // status.set takes string or { text, tone }
+        await ctx.status.set({ text: text, tone: state });
     } catch (err) {
-        console.error("[CC Switch Plugin] Error setting status:", err);
+        ctx.log.error("Failed to set plugin status:", err);
     }
 }
 
 async function checkUsage(ctx) {
-    const settings = ctx.settings || {};
-    const port = settings.agentPort || 15722;
-    const costThreshold = settings.costThreshold !== undefined ? Number(settings.costThreshold) : 0.1;
-    const tokenThreshold = settings.tokenThreshold !== undefined ? Number(settings.tokenThreshold) : 5000;
+    // Read settings from context config
+    const config = await ctx.config.get() || {};
+    const port = config.agentPort || 15722;
+    const costThreshold = config.costThreshold !== undefined ? Number(config.costThreshold) : 0.1;
+    const tokenThreshold = config.tokenThreshold !== undefined ? Number(config.tokenThreshold) : 5000;
+
+    const url = `http://127.0.0.1:${port}/api/usage?range=today`;
 
     try {
-        // Fetch token metrics from local Python Agent
-        const response = await fetch(`http://127.0.0.1:${port}/api/usage?range=today`);
+        // Query local Python Agent using context net API
+        const response = await ctx.net.fetch(url);
         if (!response.ok) {
-            petSetStatus(ctx, "error");
-            petAnimate(ctx, "dizzy");
-            petSpeak(ctx, "本地 Agent API 请求失败了，快帮我检查一下！");
+            await setPluginStatus(ctx, "error", "Agent API 请求失败");
+            await petReact(ctx, "error");
+            await petSpeak(ctx, "本地 Agent API 请求失败了，快帮我检查一下！");
             return;
         }
 
-        const data = await response.json();
+        // Parse JSON response safely
+        const data = typeof response.json === 'object' && response.json !== null 
+                     ? response.json 
+                     : JSON.parse(response.text);
+
         const summary = data.summary || {};
         
         // Sum up tokens: input + output + cache read + cache creation
@@ -73,10 +69,10 @@ async function checkUsage(ctx) {
                             + (summary.cache_creation_tokens || 0);
         const currentCost = summary.total_cost || 0;
 
-        petSetStatus(ctx, "ok");
+        await setPluginStatus(ctx, "success", `运行正常 - 今日已用 ${currentTokens} tk`);
 
         if (lastTotalTokens === 0) {
-            // Record initial state on startup to prevent massive dump on first tick
+            // First tick, record baseline
             lastTotalTokens = currentTokens;
             lastTotalCost = currentCost;
             return;
@@ -89,59 +85,76 @@ async function checkUsage(ctx) {
             // Check thresholds and react
             if (deltaCost >= costThreshold) {
                 // High expense warning
-                petAnimate(ctx, "sad");
-                petSpeak(ctx, `刚才这发大模型调用消耗了 ${deltaTokens} 个 tokens，吃掉了我 $${deltaCost.toFixed(4)} 的私房钱！😭`);
+                await petReact(ctx, "error");
+                await petSpeak(ctx, `刚才这发大模型调用消耗了 ${deltaTokens} 个 tokens，吃掉了我 $${deltaCost.toFixed(4)} 的饭钱！😭`);
             } else if (deltaTokens >= tokenThreshold) {
                 // Large context usage
-                petAnimate(ctx, "speak");
-                petSpeak(ctx, `哇，你这一下灌了 ${deltaTokens} 个 tokens，脑壳要算烧了！⚡`);
+                await petReact(ctx, "thinking");
+                await petSpeak(ctx, `哇，你这一下灌了 ${deltaTokens} 个 tokens，脑壳要算烧了！⚡`);
             } else {
                 // Normal usage
                 const replies = [
-                    `消耗了 ${deltaTokens} tokens，老板继续努力！`,
+                    `消耗了 ${deltaTokens} tokens，老铁继续努力！`,
                     `叮咚！用量增加 ${deltaTokens}，搬砖愉快！`,
-                    `小块代码执行完毕，消耗了 ${deltaTokens} tokens。`
+                    `代码执行完毕，消耗了 ${deltaTokens} tokens。`
                 ];
-                petAnimate(ctx, "happy");
-                petSpeak(ctx, replies[Math.floor(Math.random() * replies.length)]);
+                await petReact(ctx, "success");
+                await petSpeak(ctx, replies[Math.floor(Math.random() * replies.length)]);
             }
 
             lastTotalTokens = currentTokens;
             lastTotalCost = currentCost;
         }
     } catch (e) {
-        petSetStatus(ctx, "error");
-        petAnimate(ctx, "dizzy");
-        petSpeak(ctx, "无法读取 CC Switch 统计，请确认本地 agent.py 是否启动！");
-        console.error("[CC Switch Plugin] Fetch error:", e);
+        await setPluginStatus(ctx, "error", "连接 Agent 失败");
+        await petReact(ctx, "error");
+        await petSpeak(ctx, "无法读取 CC Switch 统计，请确认本地 agent.py 是否启动！");
+        ctx.log.error("Fetch error in checkUsage:", e);
     }
 }
 
-module.exports = {
-    async onActivate(ctx) {
-        console.log("[CC Switch Plugin] Activating CC Switch Companion plugin...");
+// Define the plugin start and stop definitions
+const pluginDefinition = {
+    async start(ctx) {
+        ctx.log.info("CC Switch Companion plugin started.");
         lastTotalTokens = 0;
         lastTotalCost = 0;
-        
-        // Run initial check immediately
+
+        // Run initial check
         await checkUsage(ctx);
 
-        // Bind schedule trigger listeners dynamically
-        if (ctx.schedules && typeof ctx.schedules.on === 'function') {
-            ctx.schedules.on('pollUsage', () => checkUsage(ctx));
-        } else if (ctx.onSchedule) {
-            ctx.onSchedule('pollUsage', () => checkUsage(ctx));
+        // Read pollInterval config to set schedule
+        const config = await ctx.config.get() || {};
+        const intervalMap = {
+            "10s": 10000,
+            "15s": 15000,
+            "30s": 30000,
+            "60s": 60000
+        };
+        const intervalMs = intervalMap[config.pollInterval] || 15000;
+
+        // Register schedule programmatically in SDK v3
+        if (ctx.schedule && typeof ctx.schedule.every === 'function') {
+            await ctx.schedule.every('pollUsage', intervalMs, () => checkUsage(ctx));
+            ctx.log.info(`Scheduled pollUsage every ${intervalMs}ms.`);
         }
     },
 
-    async onDeactivate(ctx) {
-        console.log("[CC Switch Plugin] Deactivating plugin.");
-    },
+    async stop(ctx) {
+        ctx.log.info("CC Switch Companion plugin stopped.");
+    }
+};
 
-    // Supported top-level callback for scheduler triggers
-    async onSchedule(ctx, scheduleName) {
-        if (scheduleName === 'pollUsage') {
-            await checkUsage(ctx);
+// Export the register style for official bundling/harness compatibility
+module.exports = {
+    register(api) {
+        if (api && typeof api.register === 'function') {
+            api.register(pluginDefinition);
         }
     }
 };
+
+// Support top-level browser global execution
+if (typeof OpenPetsPlugin !== 'undefined' && typeof OpenPetsPlugin.register === 'function') {
+    OpenPetsPlugin.register(pluginDefinition);
+}

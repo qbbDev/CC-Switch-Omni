@@ -2,20 +2,25 @@
   "manifestVersion": 3,
   "id": "openpets.cc-switch",
   "name": "CC Switch 用量监控助手",
-  "version": "1.0.0",
   "description": "监控 CC Switch 代理网关的 Token 消耗、大模型调用次数与花费，并联动桌面宠物进行气泡吐槽和心情反馈。",
-  "author": "CC Switch Omni",
+  "version": "1.0.0",
   "runtime": "javascript",
-  "entry": "index.js",
   "sdkVersion": "3.0.0",
+  "entry": "index.js",
   "permissions": [
-    "network:fetch"
+    "network",
+    "schedule",
+    "pet:speak",
+    "pet:reaction",
+    "ui:panel"
   ],
-  "hosts": [
-    "http://127.0.0.1:15722",
-    "http://localhost:15722"
-  ],
-  "settings": {
+  "network": {
+    "hosts": [
+      "http://127.0.0.1:15722",
+      "http://localhost:15722"
+    ]
+  },
+  "configSchema": {
     "agentPort": {
       "type": "number",
       "default": 15722,
@@ -24,7 +29,12 @@
     "pollInterval": {
       "type": "select",
       "default": "15s",
-      "options": ["10s", "15s", "30s", "60s"],
+      "options": [
+        { "label": "10秒", "value": "10s" },
+        { "label": "15秒", "value": "15s" },
+        { "label": "30秒", "value": "30s" },
+        { "label": "60秒", "value": "60s" }
+      ],
       "label": "数据更新频率"
     },
     "costThreshold": {
@@ -38,17 +48,7 @@
       "label": "单次大额 Token 阈值"
     }
   },
-  "schedules": [
-    {
-      "name": "pollUsage",
-      "interval": "15s"
-    }
-  ],
-  "panels": [
-    {
-      "id": "usage-dashboard",
-      "title": "CC 用量看板",
-      "entry": "panel.html"
-    }
-  ]
+  "panels": {
+    "usage-dashboard": "panel.html"
+  }
 }
