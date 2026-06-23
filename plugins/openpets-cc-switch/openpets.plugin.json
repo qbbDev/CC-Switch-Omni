@@ -16,8 +16,8 @@
   ],
   "network": {
     "hosts": [
-      "http://127.0.0.1:15722",
-      "http://localhost:15722"
+      "127.0.0.1",
+      "localhost"
     ]
   },
   "configSchema": {
