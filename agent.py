@@ -19,17 +19,6 @@ def get_db_path():
     home = Path.home()
     return home / ".cc-switch" / "cc-switch.db"
 
-def get_active_providers(cursor):
-    try:
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='providers'")
-        if not cursor.fetchone():
-            return []
-        
-        cursor.execute("SELECT id, app_type, name FROM providers WHERE is_current = 1")
-        return cursor.fetchall()
-    except Exception as e:
-        print(f"Error fetching active providers: {e}")
-        return []
 
 def query_cc_switch_data(db_path, start_time=None, end_time=None, app_type=None, provider_name=None, model=None):
     if not db_path.exists():
@@ -168,69 +157,7 @@ def query_cc_switch_data(db_path, start_time=None, end_time=None, app_type=None,
             "success_rate": round(success_rate, 2)
         }
 
-        # 4. Get active configurations (always query current settings config)
-        active_providers = get_active_providers(cursor)
-        active_map = {p[1]: p[2] for p in active_providers}
-        
-        cursor.execute(f"SELECT DISTINCT {app_type_col} FROM proxy_request_logs l")
-        app_types = [r[0] for r in cursor.fetchall() if r[0]]
-        
-        active_configs = []
-        for app in app_types:
-            # We want current configurations summary for this app
-            app_clauses = [f"{created_at_col} >= ?", f"{created_at_col} <= ?", f"{app_type_col} = ?"]
-            app_params = [start_time, end_time, app]
-            app_where = "WHERE " + " AND ".join(app_clauses)
-            
-            sub_query = f"""
-                SELECT 
-                    COUNT(*),
-                    SUM(COALESCE({fresh_input_col}, 0)),
-                    SUM(COALESCE({output_col}, 0)),
-                    SUM(COALESCE({cache_read_col}, 0)),
-                    SUM(COALESCE({cache_creation_col}, 0)),
-                    SUM(COALESCE({cost_col}, 0.0)),
-                    SUM(CASE WHEN {status_col} >= 200 AND {status_col} < 300 THEN 1 ELSE 0 END)
-                FROM proxy_request_logs l
-                LEFT JOIN providers p ON {l_provider_id_col} = p.id
-                {app_where}
-            """
-            cursor.execute(sub_query, app_params)
-            r_row = cursor.fetchone()
-            
-            reqs = r_row[0] or 0
-            if reqs == 0:
-                continue
-                
-            in_t = r_row[1] or 0
-            out_t = r_row[2] or 0
-            c_read = r_row[3] or 0
-            c_write = r_row[4] or 0
-            cst = r_row[5] or 0.0
-            succ = r_row[6] or 0
-            succ_rate = (succ / reqs * 100) if reqs > 0 else 100.0
-            
-            provider_name = active_map.get(app, "默认配置")
-            if app == "claude-desktop" and "claude-desktop" not in active_map:
-                provider_name = active_map.get("claude", provider_name)
-                
-            active_configs.append({
-                "app_type": app,
-                "provider_name": provider_name,
-                "summary": {
-                    "total_requests": reqs,
-                    "total_tokens": in_t + out_t,
-                    "real_tokens": in_t + out_t + c_read + c_write,
-                    "input_tokens": in_t,
-                    "output_tokens": out_t,
-                    "cache_read_tokens": c_read,
-                    "cache_creation_tokens": c_write,
-                    "total_cost": round(cst, 6),
-                    "success_rate": round(succ_rate, 2)
-                }
-            })
-
-        # 5. Query Trends
+        # 4. Query Trends
         duration = end_time - start_time
         group_by_hour = duration <= 86400
         trends = []
@@ -287,41 +214,7 @@ def query_cc_switch_data(db_path, start_time=None, end_time=None, app_type=None,
                         "cost": round(r[6] or 0.0, 6)
                     })
 
-        # 6. Query Recent Logs
-        select_fields = [
-            "l.request_id",
-            f"COALESCE(p.name, {l_provider_id_col}) AS provider_name",
-            f"COALESCE({app_type_col}, '') AS app_type",
-            f"COALESCE({request_model_col}, '') AS request_model",
-            f"COALESCE({input_col}, 0) AS input_tokens",
-            f"COALESCE({output_col}, 0) AS output_tokens",
-            f"COALESCE({cache_read_col}, 0) AS cache_read_tokens",
-            f"COALESCE({cache_creation_col}, 0) AS cache_creation_tokens",
-            f"COALESCE({cost_col}, 0.0) AS total_cost_usd",
-            f"COALESCE(l.duration_ms, l.latency_ms, 0) AS duration_ms",
-            f"COALESCE(l.first_token_ms, 0) AS first_token_ms",
-            f"COALESCE({status_col}, 200) AS status_code",
-            f"COALESCE({created_at_col}, 0) AS created_at"
-        ]
-        select_clause = ", ".join(select_fields)
-        
-        logs_query = f"""
-            SELECT {select_clause} 
-            FROM proxy_request_logs l
-            LEFT JOIN providers p ON {l_provider_id_col} = p.id
-            {where_clause}
-            ORDER BY {created_at_col} DESC
-            LIMIT 50
-        """
-        cursor.execute(logs_query, params)
-        cols = ["id", "provider_name", "app_type", "request_model", "input_tokens", "output_tokens", 
-                "cache_read_tokens", "cache_creation_tokens", "total_cost_usd", "duration_ms", 
-                "first_token_ms", "status_code", "created_at"]
-        recent_logs = []
-        for row in cursor.fetchall():
-            recent_logs.append({cols[i]: row[i] for i in range(len(cols))})
-
-        # 7. Query Model Stats
+        # 5. Query Model Stats
         model_stats = []
         if col_map['request_model']:
             model_query = f"""
@@ -354,71 +247,12 @@ def query_cc_switch_data(db_path, start_time=None, end_time=None, app_type=None,
                     "cost": round(r[7] or 0.0, 6)
                 })
 
-        # 8. Query Provider Stats (grouped by provider)
-        provider_stats = []
-        provider_query = f"""
-            SELECT 
-                COALESCE(p.name, {l_provider_id_col}) AS prov_name,
-                {app_type_col} AS app,
-                COUNT(*),
-                SUM(COALESCE({fresh_input_col}, 0)),
-                SUM(COALESCE({output_col}, 0)),
-                SUM(COALESCE({cache_read_col}, 0)),
-                SUM(COALESCE({cache_creation_col}, 0)),
-                SUM(COALESCE({cost_col}, 0.0)),
-                SUM(CASE WHEN {status_col} >= 200 AND {status_col} < 300 THEN 1 ELSE 0 END),
-                AVG(COALESCE(l.latency_ms, l.duration_ms, 0))
-            FROM proxy_request_logs l
-            LEFT JOIN providers p ON {l_provider_id_col} = p.id
-            {where_clause}
-            GROUP BY prov_name, {app_type_col}
-            ORDER BY COUNT(*) DESC
-        """
-        cursor.execute(provider_query, params)
-        for r in cursor.fetchall():
-            reqs = r[2] or 0
-            succ = r[8] or 0
-            provider_stats.append({
-                "provider_name": r[0] or "Unknown",
-                "app_type": r[1] or "Unknown",
-                "requests": reqs,
-                "input_tokens": r[3] or 0,
-                "output_tokens": r[4] or 0,
-                "cache_read": r[5] or 0,
-                "cache_creation": r[6] or 0,
-                "total_tokens": (r[3] or 0) + (r[4] or 0),
-                "cost": round(r[7] or 0.0, 6),
-                "success_rate": round((succ / reqs * 100) if reqs > 0 else 100.0, 2),
-                "avg_latency": round(r[9] or 0.0, 1)
-            })
-
-        # 9. Get Filter Lists (Unique Providers & Models in this time window, without other filters applied)
-        cursor.execute(f"""
-            SELECT DISTINCT COALESCE(p.name, {l_provider_id_col})
-            FROM proxy_request_logs l
-            LEFT JOIN providers p ON {l_provider_id_col} = p.id
-            WHERE {created_at_col} >= ? AND {created_at_col} <= ?
-        """, (start_time, end_time))
-        providers_list = sorted([row[0] for row in cursor.fetchall() if row[0]])
-        
-        cursor.execute(f"""
-            SELECT DISTINCT {request_model_col}
-            FROM proxy_request_logs l
-            WHERE {created_at_col} >= ? AND {created_at_col} <= ?
-        """, (start_time, end_time))
-        models_list = sorted([row[0] for row in cursor.fetchall() if row[0]])
-
         conn.close()
         
         return {
             "summary": summary,
             "trends": trends,
-            "recent_logs": recent_logs,
-            "active_configs": active_configs,
-            "model_stats": model_stats,
-            "provider_stats": provider_stats,
-            "providers_list": providers_list,
-            "models_list": models_list
+            "model_stats": model_stats
         }
         
     except Exception as e:
@@ -426,12 +260,7 @@ def query_cc_switch_data(db_path, start_time=None, end_time=None, app_type=None,
             "error": f"Failed to query database: {str(e)}",
             "summary": {"total_requests": 0, "total_tokens": 0, "total_cost": 0.0, "success_rate": 100.0},
             "trends": [],
-            "recent_logs": [],
-            "active_configs": [],
-            "model_stats": [],
-            "provider_stats": [],
-            "providers_list": [],
-            "models_list": []
+            "model_stats": []
         }
 
 class AggregatorAgentHandler(BaseHTTPRequestHandler):
