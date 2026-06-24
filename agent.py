@@ -8,8 +8,8 @@ from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 
-# Port for the aggregator agent (default is 15722)
-PORT = 15722
+# Port for the aggregator agent (default is 25722)
+PORT = 25722
 
 # Find the default cc-switch SQLite database path
 def get_db_path():

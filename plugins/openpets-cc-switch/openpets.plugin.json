@@ -27,7 +27,7 @@
   "configSchema": {
     "agentPort": {
       "type": "number",
-      "default": 15722,
+      "default": 25722,
       "label": "本地 Agent 端口"
     },
     "pollInterval": {
