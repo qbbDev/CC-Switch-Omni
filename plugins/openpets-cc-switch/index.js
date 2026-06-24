@@ -100,6 +100,7 @@ async function handleChat(ctx, prompt, checkUsage) {
     
     try {
         const chatUrl = `${vpsUrl.replace(/\/$/, '')}/api/chat`;
+        ctx.log.info(`Sending chat request to VPS: ${chatUrl}`);
         const res = await ctx.net.fetch(chatUrl, {
             method: "POST",
             headers: {
@@ -115,8 +116,14 @@ async function handleChat(ctx, prompt, checkUsage) {
             throw new Error(`Server returned status ${res.status}`);
         }
         
-        const data = JSON.parse(res.text);
+        let data;
+        if (res.json && typeof res.json === 'object') {
+            data = res.json;
+        } else {
+            data = JSON.parse(res.text);
+        }
         const reply = data.response || "我不晓得说什么呢~";
+        ctx.log.info(`Received chat reply from VPS: ${reply}`);
         
         try {
             if (ctx.pet && typeof ctx.pet.react === 'function') {
@@ -207,6 +214,7 @@ async function handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage) {
     
     try {
         const chatUrl = `${vpsUrl.replace(/\/$/, '')}/api/chat`;
+        ctx.log.info(`Sending usage alert request to VPS: ${chatUrl}`);
         const res = await ctx.net.fetch(chatUrl, {
             method: "POST",
             headers: {
@@ -224,8 +232,14 @@ async function handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage) {
             throw new Error(`Server returned status ${res.status}`);
         }
         
-        const data = JSON.parse(res.text);
+        let data;
+        if (res.json && typeof res.json === 'object') {
+            data = res.json;
+        } else {
+            data = JSON.parse(res.text);
+        }
         const reply = data.response;
+        ctx.log.info(`Received usage alert reply from VPS: ${reply}`);
         if (reply) {
             await updateBubbleText(wrapText(reply));
             
@@ -377,13 +391,20 @@ const pluginDefinition = {
         const checkUsage = async () => {
             const url = `${vpsUrl.replace(/\/$/, '')}/api/usage/get?appKey=${syncAppKey}`;
             try {
+                ctx.log.info(`Checking usage stats from VPS: ${url}`);
                 const response = await ctx.net.fetch(url);
                 if (!response.ok) {
                     ctx.log.warn("VPS usage GET returned non-OK status:", response.status);
                     return;
                 }
                 
-                const stats = JSON.parse(response.text);
+                let stats;
+                if (response.json && typeof response.json === 'object') {
+                    stats = response.json;
+                } else {
+                    stats = JSON.parse(response.text);
+                }
+                ctx.log.info("Parsed VPS usage stats:", stats);
                 if (!stats || stats.tokens === undefined) return;
                 
                 const { range, tokens, cost, hitRate } = stats;
