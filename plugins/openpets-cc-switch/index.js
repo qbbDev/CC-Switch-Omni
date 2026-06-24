@@ -138,7 +138,8 @@ async function handleChat(ctx, prompt, checkUsage) {
             body: JSON.stringify({
                 appKey: syncAppKey,
                 prompt: prompt
-            })
+            }),
+            timeoutMs: 60000
         });
         
         if (!res.ok) {
@@ -268,7 +269,8 @@ async function handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage) {
                 prompt: "[USAGE_ALERT]",
                 deltaTokens: deltaTokens,
                 deltaCost: deltaCost
-            })
+            }),
+            timeoutMs: 60000
         });
         
         if (!res.ok) {
