@@ -155,7 +155,7 @@ def query_ai_completion(prompt, system_prompt):
             
             # Safe truncation if needed, but not strictly bound by IIS 200-char path segment limit anymore
             if reply:
-                reply = reply[:200]
+                reply = reply[:55]
                 
             log(f"Parsed AI reply: {reply}")
             return reply.strip()
