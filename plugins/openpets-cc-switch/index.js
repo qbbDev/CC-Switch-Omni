@@ -5,10 +5,12 @@ let restoreTimeout = null;
 let pollTimeout = null;
 let isFirstRun = true;
 let syncAppKey = "cc_switch_sync_default";
+let tokenRange = "today";
 let costThreshold = 0.1;
 let tokenThreshold = 5000;
 let pollIntervalMs = 15000;
 let unsubscribeConfig = null;
+let currentBubbleText = "";
 
 function parseKVValue(raw) {
     if (!raw) return "";
@@ -36,6 +38,18 @@ function parseKVString(val) {
     return null;
 }
 
+function getStatsText(tokens, cost) {
+    const labelMap = {
+        "today": "今日已使用",
+        "1d": "24h已使用",
+        "7d": "7天已使用",
+        "14d": "14天已使用",
+        "30d": "30天已使用"
+    };
+    const rangeLabel = labelMap[tokenRange] || "今日已使用";
+    return `${rangeLabel}: ${tokens} 点 ($${cost.toFixed(4)})`;
+}
+
 const pluginDefinition = {
     async start(ctx) {
         ctx.log.info("CC Switch Companion plugin started.");
@@ -47,11 +61,21 @@ const pluginDefinition = {
         restoreTimeout = null;
         pollTimeout = null;
         isFirstRun = true;
+        currentBubbleText = "";
         
         // Fetch config & subscribe to changes
         const setupConfig = (config) => {
             config = config || {};
-            syncAppKey = config.syncAppKey || "cc_switch_sync_default";
+            const newSyncAppKey = config.syncAppKey || "cc_switch_sync_default";
+            const newTokenRange = config.tokenRange || "today";
+            
+            // If syncAppKey or tokenRange changed, reset the baseline on next poll
+            if (newSyncAppKey !== syncAppKey || newTokenRange !== tokenRange) {
+                isFirstRun = true;
+            }
+            
+            syncAppKey = newSyncAppKey;
+            tokenRange = newTokenRange;
             costThreshold = config.costThreshold !== undefined ? Number(config.costThreshold) : 0.1;
             tokenThreshold = config.tokenThreshold !== undefined ? Number(config.tokenThreshold) : 5000;
             
@@ -76,6 +100,11 @@ const pluginDefinition = {
         
         // Helper to update bubble text robustly
         const updateBubble = async (text) => {
+            // Avoid redundant renders if the text content hasn't changed
+            if (text === currentBubbleText && bubbleHandle) {
+                return;
+            }
+            
             if (!bubbleHandle) {
                 try {
                     // Try to use pinned bubble (requires pet:pin)
@@ -84,6 +113,7 @@ const pluginDefinition = {
                         pin: true,
                         tone: "info"
                     });
+                    currentBubbleText = text;
                 } catch (err) {
                     ctx.log.error("Failed to create pinned bubble, trying sticky fallback:", err);
                     try {
@@ -93,6 +123,7 @@ const pluginDefinition = {
                             sticky: true,
                             tone: "info"
                         });
+                        currentBubbleText = text;
                     } catch (fallbackErr) {
                         ctx.log.error("Failed to create fallback sticky bubble:", fallbackErr);
                     }
@@ -100,9 +131,11 @@ const pluginDefinition = {
             } else {
                 try {
                     await bubbleHandle.update({ text: text });
+                    currentBubbleText = text;
                 } catch (err) {
                     ctx.log.error("Failed to update bubble handle in-place, recreating:", err);
                     bubbleHandle = null;
+                    currentBubbleText = "";
                     await updateBubble(text);
                 }
             }
@@ -128,7 +161,7 @@ const pluginDefinition = {
                     lastTokens = tokens;
                     lastCost = cost;
                     isFirstRun = false;
-                    await updateBubble(`今日已使用: ${tokens} 点 ($${cost.toFixed(4)})`);
+                    await updateBubble(getStatsText(tokens, cost));
                     return;
                 }
                 
@@ -171,7 +204,7 @@ const pluginDefinition = {
                     if (restoreTimeout) clearTimeout(restoreTimeout);
                     restoreTimeout = setTimeout(async () => {
                         restoreTimeout = null;
-                        await updateBubble(`今日已使用: ${tokens} 点 ($${cost.toFixed(4)})`);
+                        await updateBubble(getStatsText(tokens, cost));
                     }, 7000);
                     
                     lastTokens = tokens;
@@ -183,7 +216,7 @@ const pluginDefinition = {
                         lastCost = cost;
                     }
                     if (!restoreTimeout) {
-                        await updateBubble(`今日已使用: ${tokens} 点 ($${cost.toFixed(4)})`);
+                        await updateBubble(getStatsText(tokens, cost));
                     }
                 }
             } catch (err) {
@@ -223,6 +256,7 @@ const pluginDefinition = {
             }
             bubbleHandle = null;
         }
+        currentBubbleText = "";
     }
 };
 

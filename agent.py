@@ -562,11 +562,25 @@ def monitor_database_loop():
         try:
             time.sleep(5)
             
-            # Check today's usage
+            config = get_openpets_config()
+            date_range = config.get("tokenRange", "today")
+            
             now = datetime.datetime.now()
             today_midnight = datetime.datetime(now.year, now.month, now.day)
-            start_time = int(today_midnight.timestamp())
+            
             end_time = int(now.timestamp())
+            if date_range == "today":
+                start_time = int(today_midnight.timestamp())
+            elif date_range == "1d":
+                start_time = end_time - 24 * 3600
+            elif date_range == "7d":
+                start_time = int((today_midnight - datetime.timedelta(days=6)).timestamp())
+            elif date_range == "14d":
+                start_time = int((today_midnight - datetime.timedelta(days=13)).timestamp())
+            elif date_range == "30d":
+                start_time = int((today_midnight - datetime.timedelta(days=29)).timestamp())
+            else:
+                start_time = int(today_midnight.timestamp())
             
             data = query_cc_switch_data(db_path, start_time=start_time, end_time=end_time)
             summary = data.get("summary", {})
@@ -582,7 +596,6 @@ def monitor_database_loop():
             heartbeat_elapsed = (current_time - last_push_time) >= 60.0
             
             if value_changed or heartbeat_elapsed:
-                config = get_openpets_config()
                 sync_app_key = config.get("syncAppKey", "cc_switch_sync_default")
                 
                 success = send_kv_update(sync_app_key, current_tokens, current_cost)
