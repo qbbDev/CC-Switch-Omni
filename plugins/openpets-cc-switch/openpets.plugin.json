@@ -15,7 +15,9 @@
     "pet:pin",
     "pet:interact",
     "ui:panel",
-    "status"
+    "status",
+    "commands",
+    "network:write"
   ],
   "network": {
     "hosts": [

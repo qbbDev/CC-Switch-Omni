@@ -11,6 +11,348 @@ let tokenThreshold = 5000;
 let pollIntervalMs = 15000;
 let unsubscribeConfig = null;
 let currentBubbleText = "";
+let chatTimeout = null;
+
+function toBase64URL(str) {
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(str);
+    let binString = "";
+    for (let i = 0; i < bytes.length; i++) {
+        binString += String.fromCharCode(bytes[i]);
+    }
+    const b64 = btoa(binString);
+    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function fromBase64URL(b64url) {
+    if (!b64url) return '';
+    try {
+        let b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+        while (b64.length % 4) {
+            b64 += '=';
+        }
+        const binString = atob(b64);
+        const bytes = new Uint8Array(binString.length);
+        for (let i = 0; i < binString.length; i++) {
+            bytes[i] = binString.charCodeAt(i);
+        }
+        const decoder = new TextDecoder();
+        return decoder.decode(bytes);
+    } catch (e) {
+        return b64url;
+    }
+}
+
+function makeSafeRequestPayload(id, prompt) {
+    let text = prompt;
+    let payload = `${id}|${text}`;
+    let b64 = toBase64URL(payload);
+    while (b64.length > 200 && text.length > 0) {
+        text = text.substring(0, text.length - 1);
+        payload = `${id}|${text}`;
+        b64 = toBase64URL(payload);
+    }
+    return b64;
+}
+
+function parseResponsePayload(cleanVal, expectedId) {
+    if (!cleanVal) return null;
+    const decodedVal = fromBase64URL(cleanVal);
+    if (!decodedVal) return null;
+    
+    // 1. Try pipe-delimited format first (e.g. "requestId|reply")
+    if (decodedVal.includes('|')) {
+        const idx = decodedVal.indexOf('|');
+        const resId = decodedVal.substring(0, idx);
+        if (resId.length <= 10) {  // simple validation for generated id length
+            const reply = decodedVal.substring(idx + 1);
+            if (resId === expectedId) {
+                return reply;
+            }
+        }
+    }
+    
+    // 2. Try JSON fallback
+    try {
+        const resData = JSON.parse(decodedVal);
+        if (resData && resData.id === expectedId) {
+            return resData.response;
+        }
+    } catch (e) {}
+    
+    return null;
+}
+
+function wrapText(text, maxLineLen = 11) {
+    if (!text) return "";
+    const lines = text.split('\n');
+    const result = [];
+    
+    for (let line of lines) {
+        let current = "";
+        let count = 0;
+        
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            current += char;
+            
+            // CJK characters count as 1, English/numbers/spaces count as 0.5
+            const isFullWidth = char.charCodeAt(0) > 255;
+            count += isFullWidth ? 1 : 0.5;
+            
+            if (count >= maxLineLen) {
+                result.push(current);
+                current = "";
+                count = 0;
+            }
+        }
+        if (current) {
+            result.push(current);
+        }
+    }
+    return result.join('\n');
+}
+
+async function handleChat(ctx, prompt, checkUsage) {
+    const requestId = Math.random().toString(36).substr(2, 7);
+    
+    if (chatTimeout) clearTimeout(chatTimeout);
+    if (restoreTimeout) {
+        clearTimeout(restoreTimeout);
+        restoreTimeout = null;
+    }
+    
+    try {
+        if (ctx.pet && typeof ctx.pet.react === 'function') {
+            await ctx.pet.react("thinking");
+        }
+    } catch (e) {
+        ctx.log.error("Failed to set thinking reaction", e);
+    }
+    
+    // Helper to update bubble
+    const updateBubbleText = async (text) => {
+        if (text === currentBubbleText && bubbleHandle) return;
+        if (!bubbleHandle) {
+            try {
+                bubbleHandle = await ctx.ui.bubble({ text: text, pin: true, tone: "info" });
+                currentBubbleText = text;
+                bubbleHandle.onDismiss((reason) => {
+                    bubbleHandle = null;
+                    currentBubbleText = "";
+                });
+            } catch (err) {
+                try {
+                    bubbleHandle = await ctx.ui.bubble({ text: text, sticky: true, tone: "info" });
+                    currentBubbleText = text;
+                    bubbleHandle.onDismiss((reason) => {
+                        bubbleHandle = null;
+                        currentBubbleText = "";
+                    });
+                } catch (fallbackErr) {}
+            }
+        } else {
+            try {
+                await bubbleHandle.update({ text: text });
+                currentBubbleText = text;
+            } catch (err) {
+                bubbleHandle = null;
+                currentBubbleText = "";
+                await updateBubbleText(text);
+            }
+        }
+    };
+
+    await updateBubbleText("让我想想... ⚡");
+    
+    // Write request to KV using a compact, safe Base64URL payload
+    const safeReq = makeSafeRequestPayload(requestId, prompt);
+    const writeUrl = `https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/${syncAppKey}/chat_request/${safeReq}`;
+    
+    try {
+        const writeRes = await ctx.net.fetch(writeUrl, { method: "POST" });
+        if (!writeRes.ok) {
+            throw new Error(`Failed to write request: ${writeRes.status}`);
+        }
+    } catch (err) {
+        ctx.log.error("Failed to send chat request to KV", err);
+        await updateBubbleText("连接桥接服务失败了... 😭");
+        try {
+            if (ctx.pet && typeof ctx.pet.react === 'function') {
+                await ctx.pet.react("error");
+            }
+        } catch (e) {}
+        return;
+    }
+    
+    // Start polling response
+    let pollCount = 0;
+    const maxPolls = 60; // 60 seconds timeout
+    
+    const pollResponse = async () => {
+        if (pollCount >= maxPolls) {
+            await updateBubbleText("思考超时了，AI 脑子冻结了 ❄️");
+            try {
+                if (ctx.pet && typeof ctx.pet.react === 'function') {
+                    await ctx.pet.react("idle");
+                }
+            } catch (e) {}
+            
+            restoreTimeout = setTimeout(async () => {
+                restoreTimeout = null;
+                await checkUsage();
+            }, 7000);
+            return;
+        }
+        
+        pollCount++;
+        const readUrl = `https://keyvalue.immanuel.co/api/KeyVal/GetValue/${syncAppKey}/chat_response`;
+        
+        try {
+            const response = await ctx.net.fetch(readUrl);
+            if (response.ok) {
+                const cleanVal = parseKVValue(response.text);
+                if (cleanVal) {
+                    const reply = parseResponsePayload(cleanVal, requestId);
+                    if (reply !== null) {
+                        const finalReply = reply || "我不晓得说什么呢~";
+                        try {
+                            if (ctx.pet && typeof ctx.pet.react === 'function') {
+                                    await ctx.pet.react("success");
+                            }
+                        } catch (e) {}
+                        
+                        await updateBubbleText(wrapText(finalReply));
+                        
+                        restoreTimeout = setTimeout(async () => {
+                            restoreTimeout = null;
+                            await checkUsage();
+                        }, 10000);
+                        return;
+                    }
+                }
+            }
+        } catch (pollErr) {
+            ctx.log.error("Error polling chat response:", pollErr);
+        }
+        
+        chatTimeout = setTimeout(pollResponse, 500);
+    };
+    
+    pollResponse();
+}
+
+async function handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage) {
+    const requestId = Math.random().toString(36).substr(2, 7);
+    
+    if (chatTimeout) clearTimeout(chatTimeout);
+    if (restoreTimeout) {
+        clearTimeout(restoreTimeout);
+        restoreTimeout = null;
+    }
+    
+    let reaction = "success";
+    if (deltaCost >= costThreshold) {
+        reaction = "error";
+    } else if (deltaTokens >= tokenThreshold) {
+        reaction = "thinking";
+    }
+    
+    try {
+        if (ctx.pet && typeof ctx.pet.react === 'function') {
+            await ctx.pet.react(reaction);
+        }
+    } catch (e) {
+        ctx.log.error("Failed to set reaction", e);
+    }
+    
+    const updateBubbleText = async (text) => {
+        if (text === currentBubbleText && bubbleHandle) return;
+        if (!bubbleHandle) {
+            try {
+                bubbleHandle = await ctx.ui.bubble({ text: text, pin: true, tone: "info" });
+                currentBubbleText = text;
+                bubbleHandle.onDismiss((reason) => {
+                    bubbleHandle = null;
+                    currentBubbleText = "";
+                });
+            } catch (err) {
+                try {
+                    bubbleHandle = await ctx.ui.bubble({ text: text, sticky: true, tone: "info" });
+                    currentBubbleText = text;
+                    bubbleHandle.onDismiss((reason) => {
+                        bubbleHandle = null;
+                        currentBubbleText = "";
+                    });
+                } catch (fallbackErr) {}
+            }
+        } else {
+            try {
+                await bubbleHandle.update({ text: text });
+                currentBubbleText = text;
+            } catch (err) {
+                bubbleHandle = null;
+                currentBubbleText = "";
+                await updateBubbleText(text);
+            }
+        }
+    };
+
+    await updateBubbleText(wrapText(`刚才那发消耗了 ${deltaTokens.toLocaleString()} 点... ⚡`));
+    
+    // Write request to KV using a compact, safe Base64URL payload
+    const safeReq = makeSafeRequestPayload(requestId, `[USAGE_ALERT] delta_tokens: ${deltaTokens}, delta_cost: ${deltaCost}`);
+    const writeUrl = `https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/${syncAppKey}/chat_request/${safeReq}`;
+    
+    try {
+        const writeRes = await ctx.net.fetch(writeUrl, { method: "POST" });
+        if (!writeRes.ok) {
+            throw new Error(`Failed to write request: ${writeRes.status}`);
+        }
+    } catch (err) {
+        ctx.log.error("Failed to send chat request to KV", err);
+        await checkUsage();
+        return;
+    }
+    
+    let pollCount = 0;
+    const maxPolls = 45;
+    
+    const pollResponse = async () => {
+        if (pollCount >= maxPolls) {
+            await checkUsage();
+            return;
+        }
+        
+        pollCount++;
+        const readUrl = `https://keyvalue.immanuel.co/api/KeyVal/GetValue/${syncAppKey}/chat_response`;
+        
+        try {
+            const response = await ctx.net.fetch(readUrl);
+            if (response.ok) {
+                const cleanVal = parseKVValue(response.text);
+                if (cleanVal) {
+                    const reply = parseResponsePayload(cleanVal, requestId);
+                    if (reply) {
+                        await updateBubbleText(wrapText(reply));
+                        
+                        restoreTimeout = setTimeout(async () => {
+                            restoreTimeout = null;
+                            await checkUsage();
+                        }, 7000);
+                        return;
+                    }
+                }
+            }
+        } catch (pollErr) {
+            ctx.log.error("Error polling chat response:", pollErr);
+        }
+        
+        chatTimeout = setTimeout(pollResponse, 500);
+    };
+    
+    pollResponse();
+}
 
 function parseKVValue(raw) {
     if (!raw) return "";
@@ -226,44 +568,7 @@ const pluginDefinition = {
                     const deltaTokens = tokens - lastTokens;
                     const deltaCost = cost - lastCost;
                     
-                    let message = "";
-                    let reaction = "success";
-                    
-                    const deltaTokensFormatted = deltaTokens.toLocaleString('en-US');
-                    if (deltaCost >= costThreshold) {
-                        reaction = "error";
-                        message = `刚才这发大模型调用\n消耗了 ${deltaTokensFormatted} 点，\n吃掉了我 $${deltaCost.toFixed(4)} 的饭钱！😭`;
-                    } else if (deltaTokens >= tokenThreshold) {
-                        reaction = "thinking";
-                        message = `哇，你这一下灌了\n${deltaTokensFormatted} 点，\n脑壳要算烧了！⚡`;
-                    } else {
-                        const replies = [
-                            `消耗了 ${deltaTokensFormatted} 点，\n老铁继续努力！`,
-                            `叮咚！用量增加 ${deltaTokensFormatted} 点，\n搬砖愉快！`,
-                            `代码执行完毕，\n消耗了 ${deltaTokensFormatted} 点。`
-                        ];
-                        reaction = "success";
-                        message = replies[Math.floor(Math.random() * replies.length)];
-                    }
-                    
-                    // Trigger pet reaction
-                    if (ctx.pet && typeof ctx.pet.react === 'function') {
-                        try {
-                            await ctx.pet.react(reaction);
-                        } catch (reactErr) {
-                            ctx.log.error("Failed to react:", reactErr);
-                        }
-                    }
-                    
-                    // Update the persistent bubble to show the warning message
-                    await updateBubble(message);
-                    
-                    // Revert back to total stats after 7 seconds
-                    if (restoreTimeout) clearTimeout(restoreTimeout);
-                    restoreTimeout = setTimeout(async () => {
-                        restoreTimeout = null;
-                        await updateBubble(getStatsText(tokens, cost, hitRate));
-                    }, 7000);
+                    await handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage);
                     
                     lastTokens = tokens;
                     lastCost = cost;
@@ -289,6 +594,48 @@ const pluginDefinition = {
         
         // Start polling loop
         poll();
+
+        // Register custom right-click commands
+        if (ctx.commands && typeof ctx.commands.register === 'function') {
+            try {
+                // Command 1: chat with pet
+                await ctx.commands.register({
+                    id: "chat-with-pet",
+                    title: "和 CC 助手聊聊天 💬",
+                    form: {
+                        fields: [
+                            {
+                                id: "message",
+                                type: "textarea",
+                                label: "你想对我说什么？",
+                                required: true,
+                                maxLength: 200
+                            }
+                        ],
+                        submitLabel: "发送"
+                    }
+                }, async (values) => {
+                    if (values && values.message) {
+                        await handleChat(ctx, values.message, checkUsage);
+                    }
+                });
+
+                // Command 2: simulate usage alert (test button)
+                await ctx.commands.register({
+                    id: "simulate-usage-alert",
+                    title: "模拟用量吐槽测试 ⚡",
+                    description: "随机模拟一次大模型调用，触发 AI 动态吐槽展示"
+                }, async () => {
+                    const simulatedTokens = Math.floor(Math.random() * 6000) + 1000;
+                    const simulatedCost = parseFloat((Math.random() * 0.12 + 0.01).toFixed(4));
+                    await handleUsageAlert(ctx, simulatedTokens, simulatedCost, checkUsage);
+                });
+
+                ctx.log.info("Commands registered.");
+            } catch (cmdErr) {
+                ctx.log.error("Failed to register commands:", cmdErr);
+            }
+        }
     },
 
     async stop(ctx) {
@@ -305,6 +652,19 @@ const pluginDefinition = {
         if (restoreTimeout) {
             clearTimeout(restoreTimeout);
             restoreTimeout = null;
+        }
+        if (chatTimeout) {
+            clearTimeout(chatTimeout);
+            chatTimeout = null;
+        }
+        if (ctx.commands && typeof ctx.commands.unregister === 'function') {
+            try {
+                await ctx.commands.unregister("chat-with-pet");
+                await ctx.commands.unregister("simulate-usage-alert");
+                ctx.log.info("Commands unregistered.");
+            } catch (cmdErr) {
+                ctx.log.error("Failed to unregister commands:", cmdErr);
+            }
         }
         if (bubbleHandle) {
             try {

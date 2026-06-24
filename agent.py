@@ -8,6 +8,35 @@ from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 
+# Custom print to auto-inject datetime timestamps in logs
+def print(*args, **kwargs):
+    import builtins
+    import datetime
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    msg = " ".join(str(arg) for arg in args)
+    builtins.print(f"[{now_str}] {msg}", **kwargs)
+
+# Load .env file configurations
+def load_dotenv():
+    dotenv_path = Path(__file__).resolve().parent / ".env"
+    if dotenv_path.exists():
+        with open(dotenv_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, val = line.split("=", 1)
+                    key = key.strip()
+                    val = val.strip()
+                    # Remove surrounding quotes
+                    if (val.startswith('"') and val.endsWith('"')) or (val.startswith("'") and val.endsWith("'")):
+                        val = val[1:-1]
+                    os.environ[key] = val
+                    print(f"Loaded config from .env: {key}={val if 'KEY' not in key else '********'}")
+
+load_dotenv()
+
 # Port for the aggregator agent (default is 25722)
 PORT = 25722
 
@@ -370,13 +399,16 @@ def send_kv_update(sync_app_key, date_range, tokens, cost, hit_rate):
     url = f"https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/{sync_app_key}/usage/{val_str}"
     req = urllib.request.Request(url, data=b"", method="POST")
     req.add_header("Content-Length", "0")
+    kv_start = datetime.datetime.now()
     try:
         with urllib.request.urlopen(req, timeout=5) as response:
             res_text = response.read().decode().strip()
-            print(f"KV update successful for appKey {sync_app_key}: {val_str} (response: {res_text})")
+            kv_elapsed = (datetime.datetime.now() - kv_start).total_seconds()
+            print(f"KV update successful for appKey {sync_app_key}: {val_str} (response: {res_text}, took {kv_elapsed:.2f}s)")
             return True
     except Exception as e:
-        print(f"KV update failed for appKey {sync_app_key}: {e}")
+        kv_elapsed = (datetime.datetime.now() - kv_start).total_seconds()
+        print(f"KV update failed for appKey {sync_app_key} after {kv_elapsed:.2f}s: {e}")
         return False
 
 def monitor_database_loop():
@@ -449,12 +481,267 @@ def monitor_database_loop():
         except Exception as e:
             print(f"Error in database monitor loop: {e}")
 
+import base64
+
+def to_b64url(s):
+    data = s.encode('utf-8')
+    encoded = base64.urlsafe_b64encode(data).decode('utf-8')
+    return encoded.rstrip('=')
+
+def from_b64url(s):
+    try:
+        rem = len(s) % 4
+        if rem > 0:
+            s += '=' * (4 - rem)
+        data = base64.urlsafe_b64decode(s.encode('utf-8'))
+        return data.decode('utf-8')
+    except Exception as e:
+        print(f"Base64URL decode failed: {e}")
+        return s
+
+def parse_kv_raw_val(raw):
+    if not raw:
+        return ""
+    clean = raw.strip()
+    clean = urllib.parse.unquote(clean)
+    if clean.startswith('"') and clean.endswith('"'):
+        try:
+            clean = json.loads(clean)
+        except Exception:
+            clean = clean[1:-1]
+    return clean
+
+def query_ai_completion(prompt, system_prompt):
+    api_base = os.environ.get("AI_API_BASE", "https://api.openai.com/v1")
+    api_key = os.environ.get("AI_API_KEY", "")
+    model = os.environ.get("AI_MODEL", "gpt-4o-mini")
+    
+    import urllib.request
+    url = f"{api_base.rstrip('/')}/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+        
+    data = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.7,
+        "max_tokens": 20000
+    }
+    
+    req_body = json.dumps(data).encode("utf-8")
+    req = urllib.request.Request(url, data=req_body, headers=headers, method="POST")
+    
+    start_time = datetime.datetime.now()
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            res_body = response.read().decode("utf-8")
+            elapsed = (datetime.datetime.now() - start_time).total_seconds()
+            print(f"AI API request completed in {elapsed:.2f}s")
+            print(f"Raw AI response body: {res_body}")
+            res_json = json.loads(res_body)
+            msg = res_json["choices"][0]["message"]
+            reply = msg.get("content")
+            if not reply:
+                reasoning = msg.get("reasoning_content", "")
+                reply = f"(思考中...) {reasoning[:80]}..." if reasoning else ""
+            
+            # Truncate to 150 chars max to stay safe with KV URL path length
+            if reply:
+                reply = reply[:150]
+                
+            print(f"Parsed AI reply: {reply}")
+            return reply.strip()
+    except Exception as e:
+        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        print(f"AI Completion request failed after {elapsed:.2f}s: {e}")
+        return f"AI 脑子卡壳了: {str(e)}"
+
+def ai_bridge_loop():
+    import time
+    import urllib.request
+    
+    print("CC Switch AI Bridge thread started.")
+    last_processed_id = None
+    
+    while True:
+        try:
+            time.sleep(0.5)
+            
+            config = get_openpets_config()
+            sync_app_key = config.get("syncAppKey", "cc_switch_sync_default")
+            
+            url = f"https://keyvalue.immanuel.co/api/KeyVal/GetValue/{sync_app_key}/chat_request"
+            try:
+                with urllib.request.urlopen(url, timeout=5) as response:
+                    raw_val = response.read().decode().strip()
+            except Exception:
+                continue
+                
+            clean_val = parse_kv_raw_val(raw_val)
+            if not clean_val:
+                continue
+                
+            try:
+                # Robustly decode request from Base64URL, hex, or raw JSON
+                decoded_val = None
+                
+                # 1. Try Base64URL
+                try:
+                    decoded_val = from_b64url(clean_val)
+                except Exception:
+                    decoded_val = None
+                
+                # 2. Try Hex
+                if decoded_val is None:
+                    try:
+                        decoded_val = bytes.fromhex(clean_val).decode('utf-8')
+                    except Exception:
+                        decoded_val = None
+                
+                # 3. Fallback to raw string
+                if decoded_val is None:
+                    decoded_val = clean_val
+                
+                # Now parse the decoded request (either pipe-delimited "id|prompt" or JSON)
+                req_id = None
+                prompt = None
+                
+                if "|" in decoded_val:
+                    parts = decoded_val.split("|", 1)
+                    if len(parts) == 2 and len(parts[0]) <= 10:  # alphanumeric random short id
+                        req_id = parts[0]
+                        prompt = parts[1]
+                
+                if not req_id or not prompt:
+                    try:
+                        req_data = json.loads(decoded_val)
+                        req_id = req_data.get("id")
+                        prompt = req_data.get("prompt")
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+                
+            if not req_id or not prompt:
+                continue
+                
+            if req_id != last_processed_id:
+                print(f"New chat request received (id: {req_id}): {prompt}")
+                
+                db_path = get_db_path()
+                date_range = config.get("tokenRange", "today")
+                
+                now = datetime.datetime.now()
+                today_midnight = datetime.datetime(now.year, now.month, now.day)
+                
+                end_time = int(now.timestamp())
+                if date_range == "today":
+                    start_time = int(today_midnight.timestamp())
+                elif date_range == "1d":
+                    start_time = end_time - 24 * 3600
+                elif date_range == "7d":
+                    start_time = int((today_midnight - datetime.timedelta(days=6)).timestamp())
+                elif date_range == "14d":
+                    start_time = int((today_midnight - datetime.timedelta(days=13)).timestamp())
+                elif date_range == "30d":
+                    start_time = int((today_midnight - datetime.timedelta(days=29)).timestamp())
+                else:
+                    start_time = int(today_midnight.timestamp())
+                
+                data = query_cc_switch_data(db_path, start_time=start_time, end_time=end_time)
+                summary = data.get("summary", {})
+                
+                cache_read = summary.get("cache_read_tokens", 0)
+                cache_creation = summary.get("cache_creation_tokens", 0)
+                input_tokens = summary.get("input_tokens", 0)
+                output_tokens = summary.get("output_tokens", 0)
+                current_tokens = input_tokens + output_tokens + cache_read + cache_creation
+                current_cost = summary.get("total_cost", 0.0)
+                
+                if prompt.startswith("[USAGE_ALERT]"):
+                    parts = prompt.split(",")
+                    delta_tokens = 0
+                    delta_cost = 0.0
+                    for p in parts:
+                        p = p.strip()
+                        if p.startswith("[USAGE_ALERT] delta_tokens:"):
+                            try: delta_tokens = int(p.split(":")[1].strip())
+                            except: pass
+                        elif p.startswith("delta_cost:"):
+                            try: delta_cost = float(p.split(":")[1].strip())
+                            except: pass
+                            
+                    system_prompt = (
+                        f"你是一只生活在用户桌面上的可爱宠物（名字叫 CC 助手）。\n"
+                        f"刚才主人发起了一次大模型调用，消耗了 {delta_tokens} 点 Token，花费了 {delta_cost:.4f} 美元。\n"
+                        f"当前整个统计区间已累计使用 {current_tokens} 点，累计花费了 {current_cost:.4f} 美元。\n"
+                        f"请以活泼、可爱、傲娇吐槽的语气对主人进行这发大模型调用的吐槽或鼓励回复。\n"
+                        f"如果单次花费较多（例如超过 $0.05 美元）或者单次 Token 较大（例如超过 5000 点），可以吐槽他“败家”或“脑壳要算烧了”；如果花费很少，可以说点鼓励或卖萌的话。\n"
+                        f"字数严格控制在 40 字以内，风格要多样、风趣，可以直接开始吐槽，千万不要带有格式前缀，不要说任何废话。"
+                    )
+                    ai_prompt = "对刚刚的用量消耗进行一次随机风格的吐槽或鼓励吧！"
+                else:
+                    system_prompt = (
+                        f"你是一只生活在用户桌面上的可爱宠物（名字叫 CC 助手）。\n"
+                        f"你的职责是陪伴主人，并关注他的大模型用量（当前统计区间（{date_range}）已使用 {current_tokens} 点，累计花费了 {current_cost:.4f} 美元）。\n"
+                        f"请以活泼、可爱、偶尔傲娇调侃的语气简短回答主人。\n"
+                        f"如果当前周期花费较多（例如超过 $1.0 美元），可以吐槽他“败家”；如果花费很少，可以鼓励他继续工作。\n"
+                        f"字数严格控制在 50 字以内，不要说任何废话。"
+                    )
+                    ai_prompt = prompt
+                
+                reply = query_ai_completion(ai_prompt, system_prompt)
+                print(f"AI bridge loop reply: {reply}")
+                
+                # Use a compact pipe-delimited format to save space
+                res_payload = f"{req_id}|{reply}"
+                b64_res = to_b64url(res_payload)
+                
+                # If it exceeds the 200-character IIS segment limit, truncate the reply until it fits
+                if len(b64_res) > 200:
+                    print(f"Response payload base64url length ({len(b64_res)}) exceeds 200. Truncating...")
+                    while len(b64_res) > 200 and len(reply) > 0:
+                        reply = reply[:-1]
+                        res_payload = f"{req_id}|{reply}"
+                        b64_res = to_b64url(res_payload)
+                    print(f"Truncated reply to: {reply} (base64url length: {len(b64_res)})")
+                
+                print(f"Res payload to update: {res_payload}")
+                update_url = f"https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/{sync_app_key}/chat_response/{b64_res}"
+                
+                req = urllib.request.Request(update_url, data=b"", method="POST")
+                req.add_header("Content-Length", "0")
+                kv_start = datetime.datetime.now()
+                try:
+                    with urllib.request.urlopen(req, timeout=5) as res:
+                        kv_elapsed = (datetime.datetime.now() - kv_start).total_seconds()
+                        print(f"Chat response updated successfully for id {req_id} (took {kv_elapsed:.2f}s)")
+                except Exception as e:
+                    kv_elapsed = (datetime.datetime.now() - kv_start).total_seconds()
+                    print(f"Failed to update chat response after {kv_elapsed:.2f}s: {e}")
+                    
+                last_processed_id = req_id
+                
+        except Exception as e:
+            print(f"Error in AI bridge loop: {e}")
+
 def run(server_class=HTTPServer, handler_class=AggregatorAgentHandler, port=PORT):
     import threading
     
     # Start database monitoring thread
     t = threading.Thread(target=monitor_database_loop, daemon=True)
     t.start()
+    
+    # Start AI bridge thread
+    t_ai = threading.Thread(target=ai_bridge_loop, daemon=True)
+    t_ai.start()
     
     # Start HTTP server
     server_address = ('', port)
