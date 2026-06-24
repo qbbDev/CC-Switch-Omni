@@ -588,11 +588,19 @@ const pluginDefinition = {
     }
 };
 
-// Export register function for ES module loading (official SDK v3 entry point style)
-export function register(OpenPetsPlugin) {
+// Export register function
+function register(OpenPetsPlugin) {
     if (OpenPetsPlugin && typeof OpenPetsPlugin.register === 'function') {
         OpenPetsPlugin.register(pluginDefinition);
     }
+}
+
+if (typeof exports !== 'undefined') {
+    exports.register = register;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { register };
 }
 
 // Fallback for direct script tag loading where OpenPetsPlugin global is present
