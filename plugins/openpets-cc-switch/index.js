@@ -13,6 +13,7 @@ let pollIntervalMs = 15000;
 let unsubscribeConfig = null;
 let currentBubbleText = "";
 let chatTimeout = null;
+let isShowingAlert = false;
 
 // Communication utilities have been migrated to synchronous direct VPS requests
 
@@ -63,6 +64,8 @@ async function handleChat(ctx, prompt, checkUsage) {
         bubbleHandle = null;
         currentBubbleText = "";
     }
+    
+    isShowingAlert = true; // Lock bubble updates
     
     try {
         if (ctx.pet && typeof ctx.pet.react === 'function') {
@@ -144,6 +147,7 @@ async function handleChat(ctx, prompt, checkUsage) {
         
         restoreTimeout = setTimeout(async () => {
             restoreTimeout = null;
+            isShowingAlert = false; // Unlock
             await checkUsage();
         }, 10000);
         
@@ -158,6 +162,7 @@ async function handleChat(ctx, prompt, checkUsage) {
         
         restoreTimeout = setTimeout(async () => {
             restoreTimeout = null;
+            isShowingAlert = false; // Unlock
             await checkUsage();
         }, 5000);
     }
@@ -180,6 +185,8 @@ async function handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage) {
         bubbleHandle = null;
         currentBubbleText = "";
     }
+    
+    isShowingAlert = true; // Lock bubble updates
     
     let reaction = "success";
     if (deltaCost >= costThreshold) {
@@ -263,13 +270,16 @@ async function handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage) {
             
             restoreTimeout = setTimeout(async () => {
                 restoreTimeout = null;
+                isShowingAlert = false; // Unlock
                 await checkUsage();
             }, 7000);
         } else {
+            isShowingAlert = false; // Unlock
             await checkUsage();
         }
     } catch (err) {
         ctx.log.error("Failed to send chat request to VPS", err);
+        isShowingAlert = false; // Unlock
         await checkUsage();
     }
 }
@@ -407,6 +417,10 @@ const pluginDefinition = {
         
         // Polling logic
         const checkUsage = async () => {
+            if (isShowingAlert) {
+                ctx.log.info("Alert or chat is active, skipping stats update poll.");
+                return;
+            }
             const url = `${vpsUrl.replace(/\/$/, '')}/api/usage/get?appKey=${syncAppKey}`;
             try {
                 ctx.log.info(`Checking usage stats from VPS: ${url}`);
