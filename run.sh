@@ -12,6 +12,6 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-# Run the agent
-echo "Launching CC Switch Agent API..."
-python3 -u agent.py
+# Run the uploader
+echo "Launching CC Switch Local Uploader..."
+python3 -u local_uploader.py
