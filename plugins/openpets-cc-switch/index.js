@@ -43,6 +43,7 @@ function wrapText(text, maxLineLen = 11) {
         if (current) {
             result.push(current);
         }
+    }
     return result.join('\n');
 }
 
