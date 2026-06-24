@@ -14,4 +14,4 @@ fi
 
 # Run the agent
 echo "Launching CC Switch Agent API..."
-python3 agent.py
+python3 -u agent.py

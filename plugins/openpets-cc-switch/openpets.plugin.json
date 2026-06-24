@@ -12,12 +12,16 @@
     "schedule",
     "pet:speak",
     "pet:reaction",
-    "ui:panel"
+    "pet:pin",
+    "pet:interact",
+    "ui:panel",
+    "status"
   ],
   "network": {
     "hosts": [
       "127.0.0.1",
-      "localhost"
+      "localhost",
+      "keyvalue.immanuel.co"
     ]
   },
   "configSchema": {
@@ -46,6 +50,23 @@
       "type": "number",
       "default": 5000,
       "label": "单次大额 Token 阈值"
+    },
+    "summaryInterval": {
+      "type": "select",
+      "default": "30s",
+      "options": [
+        { "label": "不发送", "value": "never" },
+        { "label": "5秒", "value": "5s" },
+        { "label": "10秒", "value": "10s" },
+        { "label": "30秒", "value": "30s" },
+        { "label": "60秒", "value": "60s" }
+      ],
+      "label": "定时用量报告频率"
+    },
+    "syncAppKey": {
+      "type": "text",
+      "default": "cc_switch_sync_default",
+      "label": "同步通道 AppKey"
     }
   },
   "panels": {

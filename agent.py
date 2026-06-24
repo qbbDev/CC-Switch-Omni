@@ -517,11 +517,95 @@ class AggregatorAgentHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"Not Found")
 
+def get_openpets_config():
+    try:
+        path = Path.home() / "Library" / "Application Support" / "@open-pets" / "desktop" / "openpets-plugin-state.json"
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            plugin_data = data.get("plugins", {}).get("openpets.cc-switch", {})
+            return plugin_data.get("config", {})
+    except Exception as e:
+        print(f"Error reading OpenPets config: {e}")
+    return {}
+
+def send_kv_update(sync_app_key, tokens, cost):
+    import urllib.request
+    
+    # Format cost with hyphens instead of dots to prevent IIS 404 error
+    cost_str = f"{cost:.4f}".replace(".", "-")
+    val_str = f"{tokens}_{cost_str}"
+    
+    url = f"https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/{sync_app_key}/usage/{val_str}"
+    req = urllib.request.Request(url, data=b"", method="POST")
+    req.add_header("Content-Length", "0")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            res_text = response.read().decode().strip()
+            print(f"KV update successful for appKey {sync_app_key}: {val_str} (response: {res_text})")
+            return True
+    except Exception as e:
+        print(f"KV update failed for appKey {sync_app_key}: {e}")
+        return False
+
+def monitor_database_loop():
+    import time
+    
+    db_path = get_db_path()
+    print("CC Switch Aggregator database monitoring thread started.")
+    
+    last_kv_tokens = -1
+    last_kv_cost = -1.0
+    last_push_time = 0
+    
+    while True:
+        try:
+            time.sleep(5)
+            
+            # Check today's usage
+            now = datetime.datetime.now()
+            today_midnight = datetime.datetime(now.year, now.month, now.day)
+            start_time = int(today_midnight.timestamp())
+            end_time = int(now.timestamp())
+            
+            data = query_cc_switch_data(db_path, start_time=start_time, end_time=end_time)
+            summary = data.get("summary", {})
+            
+            current_tokens = (summary.get("input_tokens", 0) + 
+                              summary.get("output_tokens", 0) + 
+                              summary.get("cache_read_tokens", 0) + 
+                              summary.get("cache_creation_tokens", 0))
+            current_cost = summary.get("total_cost", 0.0)
+            
+            current_time = time.time()
+            value_changed = (current_tokens != last_kv_tokens) or (abs(current_cost - last_kv_cost) > 0.00001)
+            heartbeat_elapsed = (current_time - last_push_time) >= 60.0
+            
+            if value_changed or heartbeat_elapsed:
+                config = get_openpets_config()
+                sync_app_key = config.get("syncAppKey", "cc_switch_sync_default")
+                
+                success = send_kv_update(sync_app_key, current_tokens, current_cost)
+                if success:
+                    last_kv_tokens = current_tokens
+                    last_kv_cost = current_cost
+                    last_push_time = current_time
+                    
+        except Exception as e:
+            print(f"Error in database monitor loop: {e}")
+
 def run(server_class=HTTPServer, handler_class=AggregatorAgentHandler, port=PORT):
+    import threading
+    
+    # Start database monitoring thread
+    t = threading.Thread(target=monitor_database_loop, daemon=True)
+    t.start()
+    
+    # Start HTTP server
     server_address = ('', port)
     httpd = server_class(server_address, handler_class)
-    print(f"CC Switch Aggregator Agent running on port {port}...")
-    print(f"Reading database from: {get_db_path()}")
+    print(f"CC Switch Aggregator HTTP Agent running on port {port}...")
+    print(f"Reading database from: {get_path_str() if 'get_path_str' in globals() else get_db_path()}")
     print("Press Ctrl+C to stop.")
     try:
         httpd.serve_forever()
