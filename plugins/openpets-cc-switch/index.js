@@ -28,25 +28,42 @@ function parseKVValue(raw) {
 function parseKVString(val) {
     if (!val) return null;
     const parts = val.split('_');
-    if (parts.length === 3) {
+    if (parts.length === 6) {
+        const range = parts[0];
+        const tokens = parseInt(parts[1], 10);
+        const cost = parseFloat(parts[2].replace('-', '.'));
+        const hitRate = parseFloat(parts[3]);
+        const remTokensPct = parseFloat(parts[4]);
+        const remCostPct = parseFloat(parts[5]);
+        if (!isNaN(tokens) && !isNaN(cost) && !isNaN(hitRate) && !isNaN(remTokensPct) && !isNaN(remCostPct)) {
+            return { range, tokens, cost, hitRate, remTokensPct, remCostPct };
+        }
+    } else if (parts.length === 3) {
         const range = parts[0];
         const tokens = parseInt(parts[1], 10);
         const cost = parseFloat(parts[2].replace('-', '.'));
         if (!isNaN(tokens) && !isNaN(cost)) {
-            return { range, tokens, cost };
+            return { range, tokens, cost, hitRate: 0.0, remTokensPct: 100.0, remCostPct: 100.0 };
         }
     } else if (parts.length === 2) {
         // Backward compatibility for old 2-part format
         const tokens = parseInt(parts[0], 10);
         const cost = parseFloat(parts[1].replace('-', '.'));
         if (!isNaN(tokens) && !isNaN(cost)) {
-            return { range: "today", tokens, cost };
+            return { range: "today", tokens, cost, hitRate: 0.0, remTokensPct: 100.0, remCostPct: 100.0 };
         }
     }
     return null;
 }
 
-function getStatsText(tokens, cost) {
+function getProgressBar(percent) {
+    const totalSteps = 10;
+    const filledSteps = Math.min(totalSteps, Math.max(0, Math.round(percent / 10)));
+    const emptySteps = totalSteps - filledSteps;
+    return "█".repeat(filledSteps) + "░".repeat(emptySteps);
+}
+
+function getStatsText(tokens, cost, hitRate, remTokensPct, remCostPct) {
     const labelMap = {
         "today": "今日已使用",
         "1d": "24h已使用",
@@ -56,7 +73,18 @@ function getStatsText(tokens, cost) {
     };
     const rangeLabel = labelMap[tokenRange] || "今日已使用";
     const tokensFormatted = tokens.toLocaleString('en-US');
-    return `${rangeLabel}: ${tokensFormatted} 点\n花费: $${cost.toFixed(4)}`;
+    
+    // Default values if undefined
+    hitRate = hitRate || 0.0;
+    remCostPct = remCostPct !== undefined ? remCostPct : 100.0;
+    
+    const hitBar = getProgressBar(hitRate);
+    const costBar = getProgressBar(remCostPct);
+    
+    return `${rangeLabel}: ${tokensFormatted} 点\n` +
+           `花费: $${cost.toFixed(4)}\n` +
+           `缓存命中: ${hitBar} ${hitRate.toFixed(1)}%\n` +
+           `额度剩余: ${costBar} ${remCostPct.toFixed(1)}%`;
 }
 
 const pluginDefinition = {
@@ -176,7 +204,7 @@ const pluginDefinition = {
                     lastTokens = tokens;
                     lastCost = cost;
                     isFirstRun = false;
-                    await updateBubble(getStatsText(tokens, cost));
+                    await updateBubble(getStatsText(tokens, cost, hitRate, remTokensPct, remCostPct));
                     return;
                 }
                 
@@ -220,7 +248,7 @@ const pluginDefinition = {
                     if (restoreTimeout) clearTimeout(restoreTimeout);
                     restoreTimeout = setTimeout(async () => {
                         restoreTimeout = null;
-                        await updateBubble(getStatsText(tokens, cost));
+                        await updateBubble(getStatsText(tokens, cost, hitRate, remTokensPct, remCostPct));
                     }, 7000);
                     
                     lastTokens = tokens;
@@ -232,7 +260,7 @@ const pluginDefinition = {
                         lastCost = cost;
                     }
                     if (!restoreTimeout) {
-                        await updateBubble(getStatsText(tokens, cost));
+                        await updateBubble(getStatsText(tokens, cost, hitRate, remTokensPct, remCostPct));
                     }
                 }
             } catch (err) {
