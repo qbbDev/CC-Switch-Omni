@@ -57,6 +57,63 @@ DEFAULT_CUSTOM_CHAT_PROMPT = (
     "字数严格控制在 50 字以内，不要说任何废话。"
 )
 
+PROMPTS_CACHE = {
+    "USAGE_ALERT": DEFAULT_USAGE_ALERT_PROMPT,
+    "CUSTOM_CHAT": DEFAULT_CUSTOM_CHAT_PROMPT,
+    "mtime": 0.0
+}
+
+def get_prompts():
+    md_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts.md")
+    if not os.path.exists(md_path):
+        return {
+            "USAGE_ALERT": os.environ.get("USAGE_ALERT_PROMPT", DEFAULT_USAGE_ALERT_PROMPT),
+            "CUSTOM_CHAT": os.environ.get("CUSTOM_CHAT_PROMPT", DEFAULT_CUSTOM_CHAT_PROMPT)
+        }
+    
+    try:
+        mtime = os.path.getmtime(md_path)
+        if mtime > PROMPTS_CACHE["mtime"]:
+            with open(md_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            current_section = None
+            section_lines = []
+            parsed = {}
+            
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("## "):
+                    if current_section:
+                        parsed[current_section] = "\n".join(section_lines).strip()
+                    
+                    header = stripped[3:].strip().upper()
+                    if header in ["USAGE_ALERT", "CUSTOM_CHAT"]:
+                        current_section = header
+                        section_lines = []
+                    else:
+                        current_section = None
+                elif current_section is not None:
+                    section_lines.append(line)
+                    
+            if current_section:
+                parsed[current_section] = "\n".join(section_lines).strip()
+            
+            if "USAGE_ALERT" in parsed:
+                PROMPTS_CACHE["USAGE_ALERT"] = parsed["USAGE_ALERT"]
+            if "CUSTOM_CHAT" in parsed:
+                PROMPTS_CACHE["CUSTOM_CHAT"] = parsed["CUSTOM_CHAT"]
+                
+            PROMPTS_CACHE["mtime"] = mtime
+            log(f"Reloaded prompts from prompts.md (mtime: {mtime})")
+    except Exception as e:
+        log(f"Error loading prompts.md: {e}")
+        
+    return {
+        "USAGE_ALERT": os.environ.get("USAGE_ALERT_PROMPT", PROMPTS_CACHE["USAGE_ALERT"]),
+        "CUSTOM_CHAT": os.environ.get("CUSTOM_CHAT_PROMPT", PROMPTS_CACHE["CUSTOM_CHAT"])
+    }
+
 def query_ai_completion(prompt, system_prompt):
     api_base = os.environ.get("AI_API_BASE", "https://api.openai.com/v1")
     api_key = os.environ.get("AI_API_KEY", "")
@@ -204,7 +261,8 @@ class VPSBridgeHandler(BaseHTTPRequestHandler):
                     delta_tokens = int(data.get("deltaTokens", 0))
                     delta_cost = float(data.get("deltaCost", 0.0))
                     
-                    tpl = os.environ.get("USAGE_ALERT_PROMPT", DEFAULT_USAGE_ALERT_PROMPT)
+                    prompts = get_prompts()
+                    tpl = prompts["USAGE_ALERT"]
                     system_prompt = (tpl
                         .replace("{delta_tokens}", str(delta_tokens))
                         .replace("{delta_cost}", f"{delta_cost:.4f}")
@@ -213,7 +271,8 @@ class VPSBridgeHandler(BaseHTTPRequestHandler):
                         .replace("{date_range}", str(date_range)))
                     ai_prompt = "对刚刚的用量消耗进行一次随机风格的吐槽或鼓励吧！"
                 else:
-                    tpl = os.environ.get("CUSTOM_CHAT_PROMPT", DEFAULT_CUSTOM_CHAT_PROMPT)
+                    prompts = get_prompts()
+                    tpl = prompts["CUSTOM_CHAT"]
                     system_prompt = (tpl
                         .replace("{current_tokens}", str(current_tokens))
                         .replace("{current_cost}", f"{current_cost:.4f}")
