@@ -28,11 +28,19 @@ function parseKVValue(raw) {
 function parseKVString(val) {
     if (!val) return null;
     const parts = val.split('_');
-    if (parts.length === 2) {
+    if (parts.length === 3) {
+        const range = parts[0];
+        const tokens = parseInt(parts[1], 10);
+        const cost = parseFloat(parts[2].replace('-', '.'));
+        if (!isNaN(tokens) && !isNaN(cost)) {
+            return { range, tokens, cost };
+        }
+    } else if (parts.length === 2) {
+        // Backward compatibility for old 2-part format
         const tokens = parseInt(parts[0], 10);
         const cost = parseFloat(parts[1].replace('-', '.'));
         if (!isNaN(tokens) && !isNaN(cost)) {
-            return { tokens, cost };
+            return { range: "today", tokens, cost };
         }
     }
     return null;
@@ -47,7 +55,8 @@ function getStatsText(tokens, cost) {
         "30d": "30天已使用"
     };
     const rangeLabel = labelMap[tokenRange] || "今日已使用";
-    return `${rangeLabel}: ${tokens} 点 ($${cost.toFixed(4)})`;
+    const tokensFormatted = tokens.toLocaleString('en-US');
+    return `${rangeLabel}: ${tokensFormatted} 点\n花费: $${cost.toFixed(4)}`;
 }
 
 const pluginDefinition = {
@@ -155,7 +164,13 @@ const pluginDefinition = {
                 const parsed = parseKVString(cleanVal);
                 if (!parsed) return;
                 
-                const { tokens, cost } = parsed;
+                const { range, tokens, cost } = parsed;
+                
+                // Skip if range mismatch (waiting for python agent to update range value)
+                if (range !== tokenRange) {
+                    ctx.log.info(`KV range '${range}' does not match configured '${tokenRange}' yet, waiting for agent sync...`);
+                    return;
+                }
                 
                 if (isFirstRun) {
                     lastTokens = tokens;
@@ -172,17 +187,18 @@ const pluginDefinition = {
                     let message = "";
                     let reaction = "success";
                     
+                    const deltaTokensFormatted = deltaTokens.toLocaleString('en-US');
                     if (deltaCost >= costThreshold) {
                         reaction = "error";
-                        message = `刚才这发大模型调用消耗了 ${deltaTokens} 点，吃掉了我 $${deltaCost.toFixed(4)} 的饭钱！😭`;
+                        message = `刚才这发大模型调用\n消耗了 ${deltaTokensFormatted} 点，\n吃掉了我 $${deltaCost.toFixed(4)} 的饭钱！😭`;
                     } else if (deltaTokens >= tokenThreshold) {
                         reaction = "thinking";
-                        message = `哇，你这一下灌了 ${deltaTokens} 点，脑壳要算烧了！⚡`;
+                        message = `哇，你这一下灌了\n${deltaTokensFormatted} 点，\n脑壳要算烧了！⚡`;
                     } else {
                         const replies = [
-                            `消耗了 ${deltaTokens} 点，老铁继续努力！`,
-                            `叮咚！用量增加 ${deltaTokens} 点，搬砖愉快！`,
-                            `代码执行完毕，消耗了 ${deltaTokens} 点。`
+                            `消耗了 ${deltaTokensFormatted} 点，\n老铁继续努力！`,
+                            `叮咚！用量增加 ${deltaTokensFormatted} 点，\n搬砖愉快！`,
+                            `代码执行完毕，\n消耗了 ${deltaTokensFormatted} 点。`
                         ];
                         reaction = "success";
                         message = replies[Math.floor(Math.random() * replies.length)];

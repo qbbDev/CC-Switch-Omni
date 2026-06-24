@@ -529,12 +529,12 @@ def get_openpets_config():
         print(f"Error reading OpenPets config: {e}")
     return {}
 
-def send_kv_update(sync_app_key, tokens, cost):
+def send_kv_update(sync_app_key, date_range, tokens, cost):
     import urllib.request
     
     # Format cost with hyphens instead of dots to prevent IIS 404 error
     cost_str = f"{cost:.4f}".replace(".", "-")
-    val_str = f"{tokens}_{cost_str}"
+    val_str = f"{date_range}_{tokens}_{cost_str}"
     
     url = f"https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/{sync_app_key}/usage/{val_str}"
     req = urllib.request.Request(url, data=b"", method="POST")
@@ -598,7 +598,7 @@ def monitor_database_loop():
             if value_changed or heartbeat_elapsed:
                 sync_app_key = config.get("syncAppKey", "cc_switch_sync_default")
                 
-                success = send_kv_update(sync_app_key, current_tokens, current_cost)
+                success = send_kv_update(sync_app_key, date_range, current_tokens, current_cost)
                 if success:
                     last_kv_tokens = current_tokens
                     last_kv_cost = current_cost
