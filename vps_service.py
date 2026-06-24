@@ -293,6 +293,22 @@ class VPSBridgeHandler(BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(f"Internal Server Error: {str(e)}".encode())
+        elif parsed_path.path == "/api/log":
+            try:
+                data = json.loads(post_data)
+                log(f"CLIENT ERROR LOG: {data.get('message', '')}")
+                res = {"success": True}
+                res_bytes = json.dumps(res).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(res_bytes)))
+                self.end_cors_headers()
+                self.wfile.write(res_bytes)
+            except Exception as e:
+                log(f"Failed to write client log: {e}")
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(f"Bad Request: {str(e)}".encode())
         else:
             self.send_response(404)
             self.end_headers()

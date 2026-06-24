@@ -43,8 +43,24 @@ function wrapText(text, maxLineLen = 11) {
         if (current) {
             result.push(current);
         }
-    }
     return result.join('\n');
+}
+
+async function logErrorToServer(ctx, err, context) {
+    try {
+        const logUrl = `${vpsUrl.replace(/\/$/, '')}/api/log`;
+        await ctx.net.fetch(logUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                message: `[${context}] Error: ${err.message || err}\nStack: ${err.stack || ''}`
+            })
+        });
+    } catch (e) {
+        ctx.log.error("Failed to log error to server:", e);
+    }
 }
 
 async function handleChat(ctx, prompt, checkUsage) {
@@ -153,6 +169,7 @@ async function handleChat(ctx, prompt, checkUsage) {
         
     } catch (err) {
         ctx.log.error("Failed to send chat request to VPS", err);
+        await logErrorToServer(ctx, err, "handleChat:catch");
         await updateBubbleText("连接中转服务失败了... 😭");
         try {
             if (ctx.pet && typeof ctx.pet.react === 'function') {
@@ -274,11 +291,13 @@ async function handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage) {
                 await checkUsage();
             }, 7000);
         } else {
+            await logErrorToServer(ctx, "Reply from VPS was empty or undefined", "handleUsageAlert:emptyReply");
             isShowingAlert = false; // Unlock
             await checkUsage();
         }
     } catch (err) {
         ctx.log.error("Failed to send chat request to VPS", err);
+        await logErrorToServer(ctx, err, "handleUsageAlert:catch");
         isShowingAlert = false; // Unlock
         await checkUsage();
     }
