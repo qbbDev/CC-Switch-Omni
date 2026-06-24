@@ -678,23 +678,39 @@ def ai_bridge_loop():
                             try: delta_cost = float(p.split(":")[1].strip())
                             except: pass
                             
-                    system_prompt = (
-                        f"你是一只生活在用户桌面上的可爱宠物（名字叫 CC 助手）。\n"
-                        f"刚才主人发起了一次大模型调用，消耗了 {delta_tokens} 点 Token，花费了 {delta_cost:.4f} 美元。\n"
-                        f"当前整个统计区间已累计使用 {current_tokens} 点，累计花费了 {current_cost:.4f} 美元。\n"
-                        f"请以活泼、可爱、傲娇吐槽的语气对主人进行这发大模型调用的吐槽或鼓励回复。\n"
-                        f"如果单次花费较多（例如超过 $0.05 美元）或者单次 Token 较大（例如超过 5000 点），可以吐槽他“败家”或“脑壳要算烧了”；如果花费很少，可以说点鼓励或卖萌的话。\n"
-                        f"字数严格控制在 40 字以内，风格要多样、风趣，可以直接开始吐槽，千万不要带有格式前缀，不要说任何废话。"
-                    )
+                    tpl = config.get("usageAlertPrompt", "")
+                    if not tpl:
+                        tpl = (
+                            "你是一只生活在用户桌面上的可爱宠物（名字叫 CC 助手）。\n"
+                            "刚才主人发起了一次大模型调用，消耗了 {delta_tokens} 点 Token，花费了 {delta_cost} 美元。\n"
+                            "当前整个统计区间已累计使用 {current_tokens} 点，累计花费了 {current_cost} 美元。\n"
+                            "请以活泼、可爱、傲娇吐槽的语气对主人进行这发大模型调用的吐槽或鼓励回复。\n"
+                            "如果单次花费较多（例如超过 $0.05 美元）或者单次 Token 较大（例如超过 5000 点），可以吐槽他“败家”或“脑壳要算烧了”；如果花费很少，可以说点鼓励或卖萌的话。\n"
+                            "字数严格控制在 40 字以内，风格要多样、风趣，可以直接开始吐槽，千万不要带有格式前缀，不要说任何废话。"
+                        )
+                    
+                    system_prompt = (tpl
+                        .replace("{delta_tokens}", str(delta_tokens))
+                        .replace("{delta_cost}", f"{delta_cost:.4f}")
+                        .replace("{current_tokens}", str(current_tokens))
+                        .replace("{current_cost}", f"{current_cost:.4f}")
+                        .replace("{date_range}", str(date_range)))
                     ai_prompt = "对刚刚的用量消耗进行一次随机风格的吐槽或鼓励吧！"
                 else:
-                    system_prompt = (
-                        f"你是一只生活在用户桌面上的可爱宠物（名字叫 CC 助手）。\n"
-                        f"你的职责是陪伴主人，并关注他的大模型用量（当前统计区间（{date_range}）已使用 {current_tokens} 点，累计花费了 {current_cost:.4f} 美元）。\n"
-                        f"请以活泼、可爱、偶尔傲娇调侃的语气简短回答主人。\n"
-                        f"如果当前周期花费较多（例如超过 $1.0 美元），可以吐槽他“败家”；如果花费很少，可以鼓励他继续工作。\n"
-                        f"字数严格控制在 50 字以内，不要说任何废话。"
-                    )
+                    tpl = config.get("customChatPrompt", "")
+                    if not tpl:
+                        tpl = (
+                            "你是一只生活在用户桌面上的可爱宠物（名字叫 CC 助手）。\n"
+                            "你的职责是陪伴主人，并关注他的大模型用量（当前统计区间（{date_range}）已使用 {current_tokens} 点，累计花费了 {current_cost} 美元）。\n"
+                            "请以活泼、可爱、偶尔傲娇调侃的语气简短回答主人。\n"
+                            "如果当前周期花费较多（例如超过 $1.0 美元），可以吐槽他“败家”；如果花费很少，可以鼓励他继续工作。\n"
+                            "字数严格控制在 50 字以内，不要说任何废话。"
+                        )
+                    
+                    system_prompt = (tpl
+                        .replace("{current_tokens}", str(current_tokens))
+                        .replace("{current_cost}", f"{current_cost:.4f}")
+                        .replace("{date_range}", str(date_range)))
                     ai_prompt = prompt
                 
                 reply = query_ai_completion(ai_prompt, system_prompt)
