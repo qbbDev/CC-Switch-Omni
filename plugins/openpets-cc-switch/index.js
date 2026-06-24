@@ -192,7 +192,7 @@ const pluginDefinition = {
                 const parsed = parseKVString(cleanVal);
                 if (!parsed) return;
                 
-                const { range, tokens, cost } = parsed;
+                const { range, tokens, cost, hitRate, remTokensPct, remCostPct } = parsed;
                 
                 // Skip if range mismatch (waiting for python agent to update range value)
                 if (range !== tokenRange) {
