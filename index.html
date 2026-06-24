@@ -1970,7 +1970,7 @@
                             </div>
                             <div class="form-group" style="margin-bottom: 0;">
                                 <label for="settingsDeviceIp">设备 API 地址 (IP + 端口)</label>
-                                <input type="text" id="settingsDeviceIp" placeholder="例如: 192.168.1.100:15722" required>
+                                <input type="text" id="settingsDeviceIp" placeholder="例如: 192.168.1.100:35722" required>
                             </div>
                         </div>
                         <button type="submit" class="btn" style="width: auto; min-width: 140px;">
@@ -2145,13 +2145,13 @@
             // Standard defaults if still not set
             if (!devicesVal || !Array.isArray(devicesVal) || devicesVal.length === 0) {
                 devicesVal = [
-                    { name: "本地设备", ip: "127.0.0.1:15722", status: "checking" }
+                    { name: "本地设备", ip: "127.0.0.1:35722", status: "checking" }
                 ];
             }
             if (!cardsVal || !Array.isArray(cardsVal) || cardsVal.length === 0) {
                 cardsVal = [
                     { id: 'card-default-1', name: '所有设备 · 全部项目', device: 'all', app: 'all', preset: '1d' },
-                    { id: 'card-default-2', name: '本地设备 · Codex', device: '127.0.0.1:15722', app: 'codex', preset: '1d' }
+                    { id: 'card-default-2', name: '本地设备 · Codex', device: '127.0.0.1:35722', app: 'codex', preset: '1d' }
                 ];
             }
             if (dbIntervalVal === null || dbIntervalVal === undefined) {
@@ -2216,7 +2216,7 @@
                 }
 
                 function checkReady() {
-                    fetch('http://127.0.0.1:15722/health')
+                    fetch('http://127.0.0.1:35722/health')
                         .then(res => {
                             if (res.ok) {
                                 dismissOverlay();

@@ -481,7 +481,7 @@
     // ── Storage ───────────────────────────────────────────────
     function loadStorage() {
         devices = safeJSON(localStorage.getItem('cc_aggregator_devices')) || [
-            { name: '本地设备', ip: '127.0.0.1:15722' }
+            { name: '本地设备', ip: '127.0.0.1:35722' }
         ];
     }
     function safeJSON(s) { try { return JSON.parse(s); } catch { return null; } }
