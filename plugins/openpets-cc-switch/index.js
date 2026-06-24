@@ -29,28 +29,35 @@ function parseKVString(val) {
     if (!val) return null;
     const parts = val.split('_');
     if (parts.length === 6) {
+        // Fallback for old 6-part format
         const range = parts[0];
         const tokens = parseInt(parts[1], 10);
         const cost = parseFloat(parts[2].replace('-', '.'));
         const hitRate = parseFloat(parts[3].replace('-', '.'));
-        const remTokensPct = parseFloat(parts[4].replace('-', '.'));
-        const remCostPct = parseFloat(parts[5].replace('-', '.'));
-        if (!isNaN(tokens) && !isNaN(cost) && !isNaN(hitRate) && !isNaN(remTokensPct) && !isNaN(remCostPct)) {
-            return { range, tokens, cost, hitRate, remTokensPct, remCostPct };
+        if (!isNaN(tokens) && !isNaN(cost) && !isNaN(hitRate)) {
+            return { range, tokens, cost, hitRate };
+        }
+    } else if (parts.length === 4) {
+        const range = parts[0];
+        const tokens = parseInt(parts[1], 10);
+        const cost = parseFloat(parts[2].replace('-', '.'));
+        const hitRate = parseFloat(parts[3].replace('-', '.'));
+        if (!isNaN(tokens) && !isNaN(cost) && !isNaN(hitRate)) {
+            return { range, tokens, cost, hitRate };
         }
     } else if (parts.length === 3) {
         const range = parts[0];
         const tokens = parseInt(parts[1], 10);
         const cost = parseFloat(parts[2].replace('-', '.'));
         if (!isNaN(tokens) && !isNaN(cost)) {
-            return { range, tokens, cost, hitRate: 0.0, remTokensPct: 100.0, remCostPct: 100.0 };
+            return { range, tokens, cost, hitRate: 0.0 };
         }
     } else if (parts.length === 2) {
         // Backward compatibility for old 2-part format
         const tokens = parseInt(parts[0], 10);
         const cost = parseFloat(parts[1].replace('-', '.'));
         if (!isNaN(tokens) && !isNaN(cost)) {
-            return { range: "today", tokens, cost, hitRate: 0.0, remTokensPct: 100.0, remCostPct: 100.0 };
+            return { range: "today", tokens, cost, hitRate: 0.0 };
         }
     }
     return null;
@@ -63,7 +70,7 @@ function getProgressBar(percent) {
     return "█".repeat(filledSteps) + "░".repeat(emptySteps);
 }
 
-function getStatsText(tokens, cost, hitRate, remTokensPct, remCostPct) {
+function getStatsText(tokens, cost, hitRate) {
     const labelMap = {
         "today": "今日已使用",
         "1d": "24h已使用",
@@ -76,15 +83,12 @@ function getStatsText(tokens, cost, hitRate, remTokensPct, remCostPct) {
     
     // Default values if undefined
     hitRate = hitRate || 0.0;
-    remCostPct = remCostPct !== undefined ? remCostPct : 100.0;
     
     const hitBar = getProgressBar(hitRate);
-    const costBar = getProgressBar(remCostPct);
     
     return `${rangeLabel}: ${tokensFormatted} 点\n` +
            `花费: $${cost.toFixed(4)}\n` +
-           `缓存命中: ${hitBar} ${hitRate.toFixed(1)}%\n` +
-           `额度剩余: ${costBar} ${remCostPct.toFixed(1)}%`;
+           `缓存命中: ${hitBar} ${hitRate.toFixed(1)}%`;
 }
 
 const pluginDefinition = {
@@ -151,6 +155,11 @@ const pluginDefinition = {
                         tone: "info"
                     });
                     currentBubbleText = text;
+                    bubbleHandle.onDismiss((reason) => {
+                        ctx.log.info("CC Switch stats bubble dismissed, clearing handle. Reason:", reason);
+                        bubbleHandle = null;
+                        currentBubbleText = "";
+                    });
                 } catch (err) {
                     ctx.log.error("Failed to create pinned bubble, trying sticky fallback:", err);
                     try {
@@ -161,6 +170,11 @@ const pluginDefinition = {
                             tone: "info"
                         });
                         currentBubbleText = text;
+                        bubbleHandle.onDismiss((reason) => {
+                            ctx.log.info("CC Switch fallback bubble dismissed, clearing handle. Reason:", reason);
+                            bubbleHandle = null;
+                            currentBubbleText = "";
+                        });
                     } catch (fallbackErr) {
                         ctx.log.error("Failed to create fallback sticky bubble:", fallbackErr);
                     }
@@ -192,7 +206,7 @@ const pluginDefinition = {
                 const parsed = parseKVString(cleanVal);
                 if (!parsed) return;
                 
-                const { range, tokens, cost, hitRate, remTokensPct, remCostPct } = parsed;
+                const { range, tokens, cost, hitRate } = parsed;
                 
                 // Skip if range mismatch (waiting for python agent to update range value)
                 if (range !== tokenRange) {
@@ -204,7 +218,7 @@ const pluginDefinition = {
                     lastTokens = tokens;
                     lastCost = cost;
                     isFirstRun = false;
-                    await updateBubble(getStatsText(tokens, cost, hitRate, remTokensPct, remCostPct));
+                    await updateBubble(getStatsText(tokens, cost, hitRate));
                     return;
                 }
                 
@@ -248,7 +262,7 @@ const pluginDefinition = {
                     if (restoreTimeout) clearTimeout(restoreTimeout);
                     restoreTimeout = setTimeout(async () => {
                         restoreTimeout = null;
-                        await updateBubble(getStatsText(tokens, cost, hitRate, remTokensPct, remCostPct));
+                        await updateBubble(getStatsText(tokens, cost, hitRate));
                     }, 7000);
                     
                     lastTokens = tokens;
@@ -260,7 +274,7 @@ const pluginDefinition = {
                         lastCost = cost;
                     }
                     if (!restoreTimeout) {
-                        await updateBubble(getStatsText(tokens, cost, hitRate, remTokensPct, remCostPct));
+                        await updateBubble(getStatsText(tokens, cost, hitRate));
                     }
                 }
             } catch (err) {

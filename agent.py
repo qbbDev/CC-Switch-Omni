@@ -529,56 +529,14 @@ def get_openpets_config():
         print(f"Error reading OpenPets config: {e}")
     return {}
 
-# Globally cached baseline stats
-cached_base_tokens = None
-cached_base_cost = None
-
-def get_baseline_stats(db_path):
-    global cached_base_tokens, cached_base_cost
-    if cached_base_tokens is not None and cached_base_cost is not None:
-        return cached_base_tokens, cached_base_cost
-        
-    try:
-        # June 22 to June 23 inclusive in local timezone
-        start_base = int(datetime.datetime(2026, 6, 22, 0, 0, 0).timestamp())
-        end_base = int(datetime.datetime(2026, 6, 23, 23, 59, 59).timestamp())
-        
-        data = query_cc_switch_data(db_path, start_time=start_base, end_time=end_base)
-        summary = data.get("summary", {})
-        
-        tokens = (summary.get("input_tokens", 0) + 
-                  summary.get("output_tokens", 0) + 
-                  summary.get("cache_read_tokens", 0) + 
-                  summary.get("cache_creation_tokens", 0))
-        cost = summary.get("total_cost", 0.0)
-        
-        # Guard against zero baseline
-        if tokens > 0 and cost > 0.0:
-            cached_base_tokens = tokens
-            cached_base_cost = cost
-            print(f"Loaded baseline stats (6.22-6.23): {tokens} tokens, ${cost:.6f} cost (corresponds to 12% usage)")
-        else:
-            # Safe defaults
-            cached_base_tokens = 29882966
-            cached_base_cost = 13.278238
-            print(f"Baseline stats empty, using fallback: {cached_base_tokens} tokens, ${cached_base_cost:.6f} cost")
-    except Exception as e:
-        print(f"Error loading baseline stats: {e}")
-        cached_base_tokens = 29882966
-        cached_base_cost = 13.278238
-        
-    return cached_base_tokens, cached_base_cost
-
-def send_kv_update(sync_app_key, date_range, tokens, cost, hit_rate, rem_tokens_pct, rem_cost_pct):
+def send_kv_update(sync_app_key, date_range, tokens, cost, hit_rate):
     import urllib.request
     
     # Format floating point stats with hyphens instead of dots to prevent IIS 404 error
     cost_str = f"{cost:.4f}".replace(".", "-")
     hit_rate_str = f"{hit_rate:.1f}".replace(".", "-")
-    rem_tokens_str = f"{rem_tokens_pct:.1f}".replace(".", "-")
-    rem_cost_str = f"{rem_cost_pct:.1f}".replace(".", "-")
     
-    val_str = f"{date_range}_{tokens}_{cost_str}_{hit_rate_str}_{rem_tokens_str}_{rem_cost_str}"
+    val_str = f"{date_range}_{tokens}_{cost_str}_{hit_rate_str}"
     
     url = f"https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/{sync_app_key}/usage/{val_str}"
     req = urllib.request.Request(url, data=b"", method="POST")
@@ -640,17 +598,6 @@ def monitor_database_loop():
             cacheable_input = input_tokens + cache_creation + cache_read
             hit_rate = (cache_read / cacheable_input * 100.0) if cacheable_input > 0 else 0.0
             
-            # Fetch baseline and calculate remaining percentage
-            base_tokens, base_cost = get_baseline_stats(db_path)
-            
-            # Use 12% baseline to project remaining percentage
-            rem_tokens_pct = 100.0 - (current_tokens / base_tokens * 12.0)
-            rem_cost_pct = 100.0 - (current_cost / base_cost * 12.0)
-            
-            # Clamp to [0, 100]
-            rem_tokens_pct = max(0.0, min(100.0, rem_tokens_pct))
-            rem_cost_pct = max(0.0, min(100.0, rem_cost_pct))
-            
             current_time = time.time()
             value_changed = (current_tokens != last_kv_tokens) or (abs(current_cost - last_kv_cost) > 0.00001)
             heartbeat_elapsed = (current_time - last_push_time) >= 60.0
@@ -663,9 +610,7 @@ def monitor_database_loop():
                     date_range, 
                     current_tokens, 
                     current_cost,
-                    hit_rate,
-                    rem_tokens_pct,
-                    rem_cost_pct
+                    hit_rate
                 )
                 if success:
                     last_kv_tokens = current_tokens
