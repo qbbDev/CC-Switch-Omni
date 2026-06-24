@@ -55,6 +55,15 @@ async function handleChat(ctx, prompt, checkUsage) {
         restoreTimeout = null;
     }
     
+    // Dismiss any existing bubble to avoid ghost handles
+    if (bubbleHandle) {
+        try {
+            await bubbleHandle.dismiss();
+        } catch (e) {}
+        bubbleHandle = null;
+        currentBubbleText = "";
+    }
+    
     try {
         if (ctx.pet && typeof ctx.pet.react === 'function') {
             await ctx.pet.react("thinking");
@@ -161,6 +170,15 @@ async function handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage) {
     if (restoreTimeout) {
         clearTimeout(restoreTimeout);
         restoreTimeout = null;
+    }
+    
+    // Dismiss any existing bubble to avoid ghost handles
+    if (bubbleHandle) {
+        try {
+            await bubbleHandle.dismiss();
+        } catch (e) {}
+        bubbleHandle = null;
+        currentBubbleText = "";
     }
     
     let reaction = "success";
