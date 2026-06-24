@@ -23,7 +23,8 @@
     "hosts": [
       "127.0.0.1",
       "localhost",
-      "keyvalue.immanuel.co"
+      "keyvalue.immanuel.co",
+      "omni.ohno.cc.cd"
     ]
   },
   "configSchema": {
