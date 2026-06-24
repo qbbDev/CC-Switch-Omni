@@ -5,6 +5,7 @@ let restoreTimeout = null;
 let pollTimeout = null;
 let isFirstRun = true;
 let syncAppKey = "cc_switch_sync_default";
+let vpsUrl = "http://127.0.0.1:25722";
 let tokenRange = "today";
 let costThreshold = 0.1;
 let tokenThreshold = 5000;
@@ -13,75 +14,7 @@ let unsubscribeConfig = null;
 let currentBubbleText = "";
 let chatTimeout = null;
 
-function toBase64URL(str) {
-    const encoder = new TextEncoder();
-    const bytes = encoder.encode(str);
-    let binString = "";
-    for (let i = 0; i < bytes.length; i++) {
-        binString += String.fromCharCode(bytes[i]);
-    }
-    const b64 = btoa(binString);
-    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-function fromBase64URL(b64url) {
-    if (!b64url) return '';
-    try {
-        let b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
-        while (b64.length % 4) {
-            b64 += '=';
-        }
-        const binString = atob(b64);
-        const bytes = new Uint8Array(binString.length);
-        for (let i = 0; i < binString.length; i++) {
-            bytes[i] = binString.charCodeAt(i);
-        }
-        const decoder = new TextDecoder();
-        return decoder.decode(bytes);
-    } catch (e) {
-        return b64url;
-    }
-}
-
-function makeSafeRequestPayload(id, prompt) {
-    let text = prompt;
-    let payload = `${id}|${text}`;
-    let b64 = toBase64URL(payload);
-    while (b64.length > 200 && text.length > 0) {
-        text = text.substring(0, text.length - 1);
-        payload = `${id}|${text}`;
-        b64 = toBase64URL(payload);
-    }
-    return b64;
-}
-
-function parseResponsePayload(cleanVal, expectedId) {
-    if (!cleanVal) return null;
-    const decodedVal = fromBase64URL(cleanVal);
-    if (!decodedVal) return null;
-    
-    // 1. Try pipe-delimited format first (e.g. "requestId|reply")
-    if (decodedVal.includes('|')) {
-        const idx = decodedVal.indexOf('|');
-        const resId = decodedVal.substring(0, idx);
-        if (resId.length <= 10) {  // simple validation for generated id length
-            const reply = decodedVal.substring(idx + 1);
-            if (resId === expectedId) {
-                return reply;
-            }
-        }
-    }
-    
-    // 2. Try JSON fallback
-    try {
-        const resData = JSON.parse(decodedVal);
-        if (resData && resData.id === expectedId) {
-            return resData.response;
-        }
-    } catch (e) {}
-    
-    return null;
-}
+// Communication utilities have been migrated to synchronous direct VPS requests
 
 function wrapText(text, maxLineLen = 11) {
     if (!text) return "";
@@ -165,81 +98,53 @@ async function handleChat(ctx, prompt, checkUsage) {
 
     await updateBubbleText("让我想想... ⚡");
     
-    // Write request to KV using a compact, safe Base64URL payload
-    const safeReq = makeSafeRequestPayload(requestId, prompt);
-    const writeUrl = `https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/${syncAppKey}/chat_request/${safeReq}`;
-    
     try {
-        const writeRes = await ctx.net.fetch(writeUrl, { method: "POST" });
-        if (!writeRes.ok) {
-            throw new Error(`Failed to write request: ${writeRes.status}`);
+        const chatUrl = `${vpsUrl.replace(/\/$/, '')}/api/chat`;
+        const res = await ctx.net.fetch(chatUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                appKey: syncAppKey,
+                prompt: prompt
+            })
+        });
+        
+        if (!res.ok) {
+            throw new Error(`Server returned status ${res.status}`);
         }
+        
+        const data = JSON.parse(res.text);
+        const reply = data.response || "我不晓得说什么呢~";
+        
+        try {
+            if (ctx.pet && typeof ctx.pet.react === 'function') {
+                await ctx.pet.react("success");
+            }
+        } catch (e) {}
+        
+        await updateBubbleText(wrapText(reply));
+        
+        restoreTimeout = setTimeout(async () => {
+            restoreTimeout = null;
+            await checkUsage();
+        }, 10000);
+        
     } catch (err) {
-        ctx.log.error("Failed to send chat request to KV", err);
-        await updateBubbleText("连接桥接服务失败了... 😭");
+        ctx.log.error("Failed to send chat request to VPS", err);
+        await updateBubbleText("连接中转服务失败了... 😭");
         try {
             if (ctx.pet && typeof ctx.pet.react === 'function') {
                 await ctx.pet.react("error");
             }
         } catch (e) {}
-        return;
+        
+        restoreTimeout = setTimeout(async () => {
+            restoreTimeout = null;
+            await checkUsage();
+        }, 5000);
     }
-    
-    // Start polling response
-    let pollCount = 0;
-    const maxPolls = 60; // 60 seconds timeout
-    
-    const pollResponse = async () => {
-        if (pollCount >= maxPolls) {
-            await updateBubbleText("思考超时了，AI 脑子冻结了 ❄️");
-            try {
-                if (ctx.pet && typeof ctx.pet.react === 'function') {
-                    await ctx.pet.react("idle");
-                }
-            } catch (e) {}
-            
-            restoreTimeout = setTimeout(async () => {
-                restoreTimeout = null;
-                await checkUsage();
-            }, 7000);
-            return;
-        }
-        
-        pollCount++;
-        const readUrl = `https://keyvalue.immanuel.co/api/KeyVal/GetValue/${syncAppKey}/chat_response`;
-        
-        try {
-            const response = await ctx.net.fetch(readUrl);
-            if (response.ok) {
-                const cleanVal = parseKVValue(response.text);
-                if (cleanVal) {
-                    const reply = parseResponsePayload(cleanVal, requestId);
-                    if (reply !== null) {
-                        const finalReply = reply || "我不晓得说什么呢~";
-                        try {
-                            if (ctx.pet && typeof ctx.pet.react === 'function') {
-                                    await ctx.pet.react("success");
-                            }
-                        } catch (e) {}
-                        
-                        await updateBubbleText(wrapText(finalReply));
-                        
-                        restoreTimeout = setTimeout(async () => {
-                            restoreTimeout = null;
-                            await checkUsage();
-                        }, 10000);
-                        return;
-                    }
-                }
-            }
-        } catch (pollErr) {
-            ctx.log.error("Error polling chat response:", pollErr);
-        }
-        
-        chatTimeout = setTimeout(pollResponse, 500);
-    };
-    
-    pollResponse();
 }
 
 async function handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage) {
@@ -300,109 +205,41 @@ async function handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage) {
 
     await updateBubbleText(wrapText(`刚才那发消耗了 ${deltaTokens.toLocaleString()} 点... ⚡`));
     
-    // Write request to KV using a compact, safe Base64URL payload
-    const safeReq = makeSafeRequestPayload(requestId, `[USAGE_ALERT] delta_tokens: ${deltaTokens}, delta_cost: ${deltaCost}`);
-    const writeUrl = `https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/${syncAppKey}/chat_request/${safeReq}`;
-    
     try {
-        const writeRes = await ctx.net.fetch(writeUrl, { method: "POST" });
-        if (!writeRes.ok) {
-            throw new Error(`Failed to write request: ${writeRes.status}`);
+        const chatUrl = `${vpsUrl.replace(/\/$/, '')}/api/chat`;
+        const res = await ctx.net.fetch(chatUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                appKey: syncAppKey,
+                prompt: "[USAGE_ALERT]",
+                deltaTokens: deltaTokens,
+                deltaCost: deltaCost
+            })
+        });
+        
+        if (!res.ok) {
+            throw new Error(`Server returned status ${res.status}`);
+        }
+        
+        const data = JSON.parse(res.text);
+        const reply = data.response;
+        if (reply) {
+            await updateBubbleText(wrapText(reply));
+            
+            restoreTimeout = setTimeout(async () => {
+                restoreTimeout = null;
+                await checkUsage();
+            }, 7000);
+        } else {
+            await checkUsage();
         }
     } catch (err) {
-        ctx.log.error("Failed to send chat request to KV", err);
+        ctx.log.error("Failed to send chat request to VPS", err);
         await checkUsage();
-        return;
     }
-    
-    let pollCount = 0;
-    const maxPolls = 45;
-    
-    const pollResponse = async () => {
-        if (pollCount >= maxPolls) {
-            await checkUsage();
-            return;
-        }
-        
-        pollCount++;
-        const readUrl = `https://keyvalue.immanuel.co/api/KeyVal/GetValue/${syncAppKey}/chat_response`;
-        
-        try {
-            const response = await ctx.net.fetch(readUrl);
-            if (response.ok) {
-                const cleanVal = parseKVValue(response.text);
-                if (cleanVal) {
-                    const reply = parseResponsePayload(cleanVal, requestId);
-                    if (reply) {
-                        await updateBubbleText(wrapText(reply));
-                        
-                        restoreTimeout = setTimeout(async () => {
-                            restoreTimeout = null;
-                            await checkUsage();
-                        }, 7000);
-                        return;
-                    }
-                }
-            }
-        } catch (pollErr) {
-            ctx.log.error("Error polling chat response:", pollErr);
-        }
-        
-        chatTimeout = setTimeout(pollResponse, 500);
-    };
-    
-    pollResponse();
-}
-
-function parseKVValue(raw) {
-    if (!raw) return "";
-    let clean = raw.trim();
-    if (clean.startsWith('"') && clean.endsWith('"')) {
-        try {
-            clean = JSON.parse(clean);
-        } catch (e) {
-            clean = clean.slice(1, -1);
-        }
-    }
-    return clean;
-}
-
-function parseKVString(val) {
-    if (!val) return null;
-    const parts = val.split('_');
-    if (parts.length === 6) {
-        // Fallback for old 6-part format
-        const range = parts[0];
-        const tokens = parseInt(parts[1], 10);
-        const cost = parseFloat(parts[2].replace('-', '.'));
-        const hitRate = parseFloat(parts[3].replace('-', '.'));
-        if (!isNaN(tokens) && !isNaN(cost) && !isNaN(hitRate)) {
-            return { range, tokens, cost, hitRate };
-        }
-    } else if (parts.length === 4) {
-        const range = parts[0];
-        const tokens = parseInt(parts[1], 10);
-        const cost = parseFloat(parts[2].replace('-', '.'));
-        const hitRate = parseFloat(parts[3].replace('-', '.'));
-        if (!isNaN(tokens) && !isNaN(cost) && !isNaN(hitRate)) {
-            return { range, tokens, cost, hitRate };
-        }
-    } else if (parts.length === 3) {
-        const range = parts[0];
-        const tokens = parseInt(parts[1], 10);
-        const cost = parseFloat(parts[2].replace('-', '.'));
-        if (!isNaN(tokens) && !isNaN(cost)) {
-            return { range, tokens, cost, hitRate: 0.0 };
-        }
-    } else if (parts.length === 2) {
-        // Backward compatibility for old 2-part format
-        const tokens = parseInt(parts[0], 10);
-        const cost = parseFloat(parts[1].replace('-', '.'));
-        if (!isNaN(tokens) && !isNaN(cost)) {
-            return { range: "today", tokens, cost, hitRate: 0.0 };
-        }
-    }
-    return null;
 }
 
 function getProgressBar(percent) {
@@ -451,14 +288,16 @@ const pluginDefinition = {
             config = config || {};
             const newSyncAppKey = config.syncAppKey || "cc_switch_sync_default";
             const newTokenRange = config.tokenRange || "today";
+            const newVpsUrl = config.vpsUrl || "http://127.0.0.1:25722";
             
-            // If syncAppKey or tokenRange changed, reset the baseline on next poll
-            if (newSyncAppKey !== syncAppKey || newTokenRange !== tokenRange) {
+            // If syncAppKey, tokenRange or vpsUrl changed, reset the baseline on next poll
+            if (newSyncAppKey !== syncAppKey || newTokenRange !== tokenRange || newVpsUrl !== vpsUrl) {
                 isFirstRun = true;
             }
             
             syncAppKey = newSyncAppKey;
             tokenRange = newTokenRange;
+            vpsUrl = newVpsUrl;
             costThreshold = config.costThreshold !== undefined ? Number(config.costThreshold) : 0.1;
             tokenThreshold = config.tokenThreshold !== undefined ? Number(config.tokenThreshold) : 5000;
             
@@ -536,23 +375,22 @@ const pluginDefinition = {
         
         // Polling logic
         const checkUsage = async () => {
-            const url = `https://keyvalue.immanuel.co/api/KeyVal/GetValue/${syncAppKey}/usage`;
+            const url = `${vpsUrl.replace(/\/$/, '')}/api/usage/get?appKey=${syncAppKey}`;
             try {
                 const response = await ctx.net.fetch(url);
                 if (!response.ok) {
-                    ctx.log.warn("KV store GET returned non-OK status:", response.status);
+                    ctx.log.warn("VPS usage GET returned non-OK status:", response.status);
                     return;
                 }
                 
-                const cleanVal = parseKVValue(response.text);
-                const parsed = parseKVString(cleanVal);
-                if (!parsed) return;
+                const stats = JSON.parse(response.text);
+                if (!stats || stats.tokens === undefined) return;
                 
-                const { range, tokens, cost, hitRate } = parsed;
+                const { range, tokens, cost, hitRate } = stats;
                 
-                // Skip if range mismatch (waiting for python agent to update range value)
+                // Skip if range mismatch (waiting for local uploader to sync)
                 if (range !== tokenRange) {
-                    ctx.log.info(`KV range '${range}' does not match configured '${tokenRange}' yet, waiting for agent sync...`);
+                    ctx.log.info(`VPS range '${range}' does not match configured '${tokenRange}' yet, waiting for uploader sync...`);
                     return;
                 }
                 
@@ -568,10 +406,10 @@ const pluginDefinition = {
                     const deltaTokens = tokens - lastTokens;
                     const deltaCost = cost - lastCost;
                     
-                    await handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage);
-                    
                     lastTokens = tokens;
                     lastCost = cost;
+                    
+                    await handleUsageAlert(ctx, deltaTokens, deltaCost, checkUsage);
                 } else {
                     // Update stats if they dropped (midnight reset) or if no warning is active
                     if (tokens < lastTokens) {
@@ -583,7 +421,7 @@ const pluginDefinition = {
                     }
                 }
             } catch (err) {
-                ctx.log.error("Error in checkUsage poll execution:", err);
+                ctx.log.error("Failed to check usage stats from VPS", err);
             }
         };
         
