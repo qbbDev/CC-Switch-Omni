@@ -32,9 +32,9 @@ function parseKVString(val) {
         const range = parts[0];
         const tokens = parseInt(parts[1], 10);
         const cost = parseFloat(parts[2].replace('-', '.'));
-        const hitRate = parseFloat(parts[3]);
-        const remTokensPct = parseFloat(parts[4]);
-        const remCostPct = parseFloat(parts[5]);
+        const hitRate = parseFloat(parts[3].replace('-', '.'));
+        const remTokensPct = parseFloat(parts[4].replace('-', '.'));
+        const remCostPct = parseFloat(parts[5].replace('-', '.'));
         if (!isNaN(tokens) && !isNaN(cost) && !isNaN(hitRate) && !isNaN(remTokensPct) && !isNaN(remCostPct)) {
             return { range, tokens, cost, hitRate, remTokensPct, remCostPct };
         }

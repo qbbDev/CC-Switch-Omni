@@ -572,9 +572,13 @@ def get_baseline_stats(db_path):
 def send_kv_update(sync_app_key, date_range, tokens, cost, hit_rate, rem_tokens_pct, rem_cost_pct):
     import urllib.request
     
-    # Format cost with hyphens instead of dots to prevent IIS 404 error
+    # Format floating point stats with hyphens instead of dots to prevent IIS 404 error
     cost_str = f"{cost:.4f}".replace(".", "-")
-    val_str = f"{date_range}_{tokens}_{cost_str}_{hit_rate:.1f}_{rem_tokens_pct:.1f}_{rem_cost_pct:.1f}"
+    hit_rate_str = f"{hit_rate:.1f}".replace(".", "-")
+    rem_tokens_str = f"{rem_tokens_pct:.1f}".replace(".", "-")
+    rem_cost_str = f"{rem_cost_pct:.1f}".replace(".", "-")
+    
+    val_str = f"{date_range}_{tokens}_{cost_str}_{hit_rate_str}_{rem_tokens_str}_{rem_cost_str}"
     
     url = f"https://keyvalue.immanuel.co/api/KeyVal/UpdateValue/{sync_app_key}/usage/{val_str}"
     req = urllib.request.Request(url, data=b"", method="POST")
