@@ -122,21 +122,14 @@ def query_cc_switch_summary(db_path, start_time, end_time):
         
     return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_creation_tokens": 0, "total_cost": 0.0}
 
-def send_vps_update(vps_url, app_key, date_range, tokens, cost, hit_rate):
+def send_vps_update(vps_url, payload):
     url = f"{vps_url.rstrip('/')}/api/usage/update"
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    data = {
-        "appKey": app_key,
-        "range": date_range,
-        "tokens": tokens,
-        "cost": cost,
-        "hitRate": hit_rate
-    }
     
-    req_body = json.dumps(data).encode("utf-8")
+    req_body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=req_body, headers=headers, method="POST")
     
     start_time = time.time()
@@ -151,11 +144,44 @@ def send_vps_update(vps_url, app_key, date_range, tokens, cost, hit_rate):
         print_log(f"Failed to upload usage to VPS after {elapsed:.2f}s: {e}")
         return False
 
+def get_range_summary(db_path, date_range, now, today_midnight):
+    end_time = int(now.timestamp())
+    if date_range == "today":
+        start_time = int(today_midnight.timestamp())
+    elif date_range == "1d":
+        start_time = end_time - 24 * 3600
+    elif date_range == "7d":
+        start_time = int((today_midnight - datetime.timedelta(days=6)).timestamp())
+    elif date_range == "14d":
+        start_time = int((today_midnight - datetime.timedelta(days=13)).timestamp())
+    elif date_range == "30d":
+        start_time = int((today_midnight - datetime.timedelta(days=29)).timestamp())
+    else:
+        start_time = int(today_midnight.timestamp())
+        
+    summary = query_cc_switch_summary(db_path, start_time, end_time)
+    
+    cache_read = summary.get("cache_read_tokens", 0)
+    cache_creation = summary.get("cache_creation_tokens", 0)
+    input_tokens = summary.get("input_tokens", 0)
+    output_tokens = summary.get("output_tokens", 0)
+    
+    tokens = input_tokens + output_tokens + cache_read + cache_creation
+    cost = summary.get("total_cost", 0.0)
+    
+    cacheable_input = input_tokens + cache_creation + cache_read
+    hit_rate = (cache_read / cacheable_input * 100.0) if cacheable_input > 0 else 0.0
+    
+    return {
+        "tokens": tokens,
+        "cost": cost,
+        "hitRate": hit_rate
+    }
+
 def monitor_database_loop():
     print_log("CC Switch Local Uploader monitoring loop started.")
     
-    last_uploaded_tokens = -1
-    last_uploaded_cost = -1.0
+    last_payload_str = ""
     last_push_time = 0
     
     while True:
@@ -172,50 +198,38 @@ def monitor_database_loop():
             now = datetime.datetime.now()
             today_midnight = datetime.datetime(now.year, now.month, now.day)
             
-            end_time = int(now.timestamp())
-            if date_range == "today":
-                start_time = int(today_midnight.timestamp())
-            elif date_range == "1d":
-                start_time = end_time - 24 * 3600
-            elif date_range == "7d":
-                start_time = int((today_midnight - datetime.timedelta(days=6)).timestamp())
-            elif date_range == "14d":
-                start_time = int((today_midnight - datetime.timedelta(days=13)).timestamp())
-            elif date_range == "30d":
-                start_time = int((today_midnight - datetime.timedelta(days=29)).timestamp())
-            else:
-                start_time = int(today_midnight.timestamp())
+            # Calculate all ranges
+            all_ranges = ["today", "1d", "7d", "14d", "30d"]
+            stats_payload = {}
+            for r in all_ranges:
+                stats_payload[r] = get_range_summary(db_path, r, now, today_midnight)
                 
-            summary = query_cc_switch_summary(db_path, start_time, end_time)
+            # Get default range from .env for backwards compatibility
+            default_stats = stats_payload.get(date_range, stats_payload["today"])
             
-            cache_read = summary.get("cache_read_tokens", 0)
-            cache_creation = summary.get("cache_creation_tokens", 0)
-            input_tokens = summary.get("input_tokens", 0)
-            output_tokens = summary.get("output_tokens", 0)
+            payload = {
+                "appKey": sync_app_key,
+                "range": date_range,
+                "tokens": default_stats["tokens"],
+                "cost": default_stats["cost"],
+                "hitRate": default_stats["hitRate"],
+                "stats": stats_payload
+            }
             
-            current_tokens = input_tokens + output_tokens + cache_read + cache_creation
-            current_cost = summary.get("total_cost", 0.0)
-            
-            cacheable_input = input_tokens + cache_creation + cache_read
-            hit_rate = (cache_read / cacheable_input * 100.0) if cacheable_input > 0 else 0.0
+            payload_str = json.dumps(payload, sort_keys=True)
             
             current_time = time.time()
-            value_changed = (current_tokens != last_uploaded_tokens) or (abs(current_cost - last_uploaded_cost) > 0.00001)
+            value_changed = (payload_str != last_payload_str)
             heartbeat_elapsed = (current_time - last_push_time) >= 60.0
             
             if value_changed or heartbeat_elapsed:
-                success = send_vps_update(
-                    vps_url,
-                    sync_app_key,
-                    date_range,
-                    current_tokens,
-                    current_cost,
-                    hit_rate
-                )
+                success = send_vps_update(vps_url, payload)
                 if success:
-                    last_uploaded_tokens = current_tokens
-                    last_uploaded_cost = current_cost
+                    last_payload_str = payload_str
                     last_push_time = current_time
+                    
+        except Exception as e:
+            print_log(f"Error in uploader monitor loop: {e}")
                     
         except Exception as e:
             print_log(f"Error in uploader monitor loop: {e}")

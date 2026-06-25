@@ -443,7 +443,7 @@ const pluginDefinition = {
                 ctx.log.info("Alert or chat is active, skipping stats update poll.");
                 return;
             }
-            const url = `${vpsUrl.replace(/\/$/, '')}/api/usage/get?appKey=${syncAppKey}`;
+            const url = `${vpsUrl.replace(/\/$/, '')}/api/usage/get?appKey=${syncAppKey}&range=${tokenRange}`;
             try {
                 ctx.log.info(`Checking usage stats from VPS: ${url}`);
                 const response = await ctx.net.fetch(url);

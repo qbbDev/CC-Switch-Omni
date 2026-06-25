@@ -178,12 +178,31 @@ class VPSBridgeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed_path = urllib.parse.urlparse(self.path)
         
-        # Endpoint: GET /api/usage/get?appKey=...
+        # Endpoint: GET /api/usage/get?appKey=...&range=...
         if parsed_path.path == "/api/usage/get":
             query = urllib.parse.parse_qs(parsed_path.query)
             app_key = query.get("appKey", ["cc_switch_sync_default"])[0]
+            requested_range = query.get("range", ["today"])[0]
             
-            stats = USAGE_STORE.get(app_key, {"range": "today", "tokens": 0, "cost": 0.0, "hitRate": 0.0})
+            entry = USAGE_STORE.get(app_key, {"range": "today", "tokens": 0, "cost": 0.0, "hitRate": 0.0})
+            
+            # If the entry contains the stats mapping, retrieve the requested range
+            stats_map = entry.get("stats", {})
+            if requested_range in stats_map:
+                stats = {
+                    "range": requested_range,
+                    "tokens": int(stats_map[requested_range].get("tokens", 0)),
+                    "cost": float(stats_map[requested_range].get("cost", 0.0)),
+                    "hitRate": float(stats_map[requested_range].get("hitRate", 0.0))
+                }
+            else:
+                # Fallback to the root-level entry values
+                stats = {
+                    "range": entry.get("range", "today"),
+                    "tokens": int(entry.get("tokens", 0)),
+                    "cost": float(entry.get("cost", 0.0)),
+                    "hitRate": float(entry.get("hitRate", 0.0))
+                }
             
             response_bytes = json.dumps(stats, ensure_ascii=False).encode('utf-8')
             self.send_response(200)
@@ -223,7 +242,8 @@ class VPSBridgeHandler(BaseHTTPRequestHandler):
                     "range": data.get("range", "today"),
                     "tokens": int(data.get("tokens", 0)),
                     "cost": float(data.get("cost", 0.0)),
-                    "hitRate": float(data.get("hitRate", 0.0))
+                    "hitRate": float(data.get("hitRate", 0.0)),
+                    "stats": data.get("stats", {})
                 }
                 
                 log(f"Usage updated for appKey {app_key}: {USAGE_STORE[app_key]}")
