@@ -313,7 +313,7 @@ function getProgressBar(percent) {
     return "█".repeat(filledSteps) + "░".repeat(emptySteps);
 }
 
-function getStatsText(tokens, cost, hitRate) {
+function getStatsText(tokens, cost, hitRate, range) {
     const labelMap = {
         "today": "今日已使用",
         "1d": "24h已使用",
@@ -321,7 +321,7 @@ function getStatsText(tokens, cost, hitRate) {
         "14d": "14天已使用",
         "30d": "30天已使用"
     };
-    const rangeLabel = labelMap[tokenRange] || "今日已使用";
+    const rangeLabel = labelMap[range] || labelMap[tokenRange] || "今日已使用";
     const tokensFormatted = tokens.toLocaleString('en-US');
     
     // Default values if undefined
@@ -461,19 +461,13 @@ const pluginDefinition = {
                 ctx.log.info("Parsed VPS usage stats:", stats);
                 if (!stats || stats.tokens === undefined) return;
                 
-                const { range, tokens, cost, hitRate } = stats;
-                
-                // Skip if range mismatch (waiting for local uploader to sync)
-                if (range !== tokenRange) {
-                    ctx.log.info(`VPS range '${range}' does not match configured '${tokenRange}' yet, waiting for uploader sync...`);
-                    return;
-                }
+                const { range: statsRange, tokens, cost, hitRate } = stats;
                 
                 if (isFirstRun) {
                     lastTokens = tokens;
                     lastCost = cost;
                     isFirstRun = false;
-                    await updateBubble(getStatsText(tokens, cost, hitRate));
+                    await updateBubble(getStatsText(tokens, cost, hitRate, statsRange));
                     return;
                 }
                 
@@ -492,7 +486,7 @@ const pluginDefinition = {
                         lastCost = cost;
                     }
                     if (!restoreTimeout) {
-                        await updateBubble(getStatsText(tokens, cost, hitRate));
+                        await updateBubble(getStatsText(tokens, cost, hitRate, statsRange));
                     }
                 }
             } catch (err) {
